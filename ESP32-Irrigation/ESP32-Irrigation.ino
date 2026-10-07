@@ -44,8 +44,10 @@ BlynkTimer timer;
 #define SOIL_DRY_ADC 1103
 #define SOIL_WET_ADC 1030
 
-// Take 100 ADC samples for every reading.
+// Keep 100 samples per measurement.
+// Sampling is NON-BLOCKING so mDash/Blynk remain responsive.
 #define SOIL_ADC_SAMPLES 100
+#define SOIL_SAMPLE_INTERVAL_MS 5
 
 
 // ============================================================
@@ -65,6 +67,12 @@ int soilRaw = 0;
 
 bool pumpState = false;
 bool autoMode = false;
+
+// Non-blocking ADC sampler
+bool samplingSoil = false;
+int soilSampleCount = 0;
+long soilSampleTotal = 0;
+unsigned long lastSoilSampleMs = 0;
 
 
 // ============================================================
@@ -90,26 +98,9 @@ void setPump(bool on) {
 
 
 // ============================================================
-// Soil Sensor
+// Soil Moisture
 // ============================================================
 
-// Read the soil sensor using 100 ADC samples and average them.
-int readSoilRaw() {
-
-  long total = 0;
-
-  for (int i = 0; i < SOIL_ADC_SAMPLES; i++) {
-
-    total += analogRead(SOIL_SENSOR_PIN);
-
-    delay(5);
-  }
-
-  return total / SOIL_ADC_SAMPLES;
-}
-
-
-// Convert calibrated ADC value to moisture percentage.
 float calculateMoisture(int raw) {
 
   if (SOIL_DRY_ADC == SOIL_WET_ADC) {
@@ -121,6 +112,77 @@ float calculateMoisture(int raw) {
       (float)(SOIL_DRY_ADC - SOIL_WET_ADC);
 
   return constrain(percentage, 0.0, 100.0);
+}
+
+
+// Start a new 100-sample measurement.
+void startSoilSampling() {
+
+  samplingSoil = true;
+  soilSampleCount = 0;
+  soilSampleTotal = 0;
+  lastSoilSampleMs = millis();
+
+  Serial.println("Starting soil measurement (100 samples)...");
+}
+
+
+// Take one ADC sample when its 5 ms interval has elapsed.
+// This function never blocks.
+void processSoilSampling() {
+
+  if (!samplingSoil) {
+    return;
+  }
+
+  unsigned long now = millis();
+
+  if ((unsigned long)(now - lastSoilSampleMs) < SOIL_SAMPLE_INTERVAL_MS) {
+    return;
+  }
+
+  lastSoilSampleMs = now;
+
+  soilSampleTotal += analogRead(SOIL_SENSOR_PIN);
+  soilSampleCount++;
+
+  if (soilSampleCount >= SOIL_ADC_SAMPLES) {
+
+    soilRaw = soilSampleTotal / SOIL_ADC_SAMPLES;
+    soilMoisture = calculateMoisture(soilRaw);
+
+    samplingSoil = false;
+
+    // Automatic control after the complete measurement.
+    controlAutomaticIrrigation();
+
+    // Blynk virtual pins:
+    // V0 = Soil moisture %
+    // V3 = Pump status
+    // V6 = Raw ADC
+
+    Blynk.virtualWrite(V0, soilMoisture);
+    Blynk.virtualWrite(V3, pumpState ? 1 : 0);
+    Blynk.virtualWrite(V6, soilRaw);
+
+    Serial.println();
+    Serial.println("========== Irrigation Data ==========");
+
+    Serial.print("Soil ADC (100 samples): ");
+    Serial.println(soilRaw);
+
+    Serial.print("Soil Moisture: ");
+    Serial.print(soilMoisture, 1);
+    Serial.println(" %");
+
+    Serial.print("Pump         : ");
+    Serial.println(pumpState ? "ON" : "OFF");
+
+    Serial.print("Mode         : ");
+    Serial.println(autoMode ? "AUTO" : "MANUAL");
+
+    Serial.println("=====================================");
+  }
 }
 
 
@@ -156,45 +218,15 @@ void controlAutomaticIrrigation() {
 
 
 // ============================================================
-// Sensor Data + Blynk
+// Measurement Scheduler
 // ============================================================
 
-void sendSensorData() {
+// Start a new soil measurement every 2 seconds.
+void scheduleSoilMeasurement() {
 
-  soilRaw = readSoilRaw();
-
-  soilMoisture = calculateMoisture(soilRaw);
-
-  // Automatic control first so Blynk receives the latest pump state.
-  controlAutomaticIrrigation();
-
-  // Blynk virtual pins:
-  // V0 = Soil moisture %
-  // V3 = Pump status
-  // V6 = Raw ADC
-
-  Blynk.virtualWrite(V0, soilMoisture);
-  Blynk.virtualWrite(V3, pumpState ? 1 : 0);
-  Blynk.virtualWrite(V6, soilRaw);
-
-
-  Serial.println();
-  Serial.println("========== Irrigation Data ==========");
-
-  Serial.print("Soil ADC (100 samples): ");
-  Serial.println(soilRaw);
-
-  Serial.print("Soil Moisture: ");
-  Serial.print(soilMoisture, 1);
-  Serial.println(" %");
-
-  Serial.print("Pump         : ");
-  Serial.println(pumpState ? "ON" : "OFF");
-
-  Serial.print("Mode         : ");
-  Serial.println(autoMode ? "AUTO" : "MANUAL");
-
-  Serial.println("=====================================");
+  if (!samplingSoil) {
+    startSoilSampling();
+  }
 }
 
 
@@ -211,6 +243,9 @@ BLYNK_WRITE(V4) {
     Serial.println(
       "Manual pump command ignored: AUTO mode is active."
     );
+
+    // Keep manual control OFF while AUTO is active.
+    Blynk.virtualWrite(V4, 0);
 
     return;
   }
@@ -361,15 +396,14 @@ void setup() {
 
 
   // ----------------------------------------------------------
-  // Sensor Timer
+  // Sensor Measurement Scheduler
   // ----------------------------------------------------------
 
-  // 100 ADC samples x 5 ms = ~500 ms sensor acquisition.
-  // Run the complete measurement every 2 seconds.
-
+  // Start one 100-sample measurement every 2 seconds.
+  // Sampling itself is non-blocking.
   timer.setInterval(
     2000L,
-    sendSensorData
+    scheduleSoilMeasurement
   );
 
 
@@ -378,6 +412,7 @@ void setup() {
   Serial.println("Soil sensor : GPIO 34");
   Serial.println("Pump relay  : GPIO 26");
   Serial.println("ADC samples : 100");
+  Serial.println("Sampling    : non-blocking");
   Serial.println("Pump starts : OFF");
   Serial.println("Mode        : MANUAL");
 }
@@ -389,9 +424,16 @@ void setup() {
 
 void loop() {
 
+  // Keep cloud services responsive.
   Blynk.run();
 
+  // Run scheduled tasks.
   timer.run();
 
-  delay(10);
+  // Process one ADC sample at a time.
+  // No 500 ms blocking delay.
+  processSoilSampling();
+
+  // No deliberate delay here.
+  // mDash/Blynk get maximum loop time.
 }
