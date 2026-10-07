@@ -5,13 +5,9 @@
  * Copyright (c) 2026 Abhishek Pandit
  */
 
-#define BLYNK_PRINT Serial
-#define BLYNK_TEMPLATE_ID   "YOUR_TEMPLATE_ID"
-#define BLYNK_TEMPLATE_NAME "ESP32 Irrigation"
-#define BLYNK_AUTH_TOKEN    "YOUR_BLYNK_AUTH_TOKEN"
+#include "secrets.h"
 
-#define MDASH_APP_NAME "ESP32-Irrigation"
-#define MDASH_DEVICE_PASSWORD "YOUR_MDASH_DEVICE_PASSWORD"
+#define BLYNK_PRINT Serial
 
 #include <WiFi.h>
 #include <WiFiManager.h>
