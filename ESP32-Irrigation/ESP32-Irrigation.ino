@@ -18,31 +18,63 @@
 
 BlynkTimer timer;
 
-// -------------------- Hardware --------------------
+// ============================================================
+// Hardware
+// ============================================================
+
 #define SOIL_SENSOR_PIN 34
 #define PUMP_PIN        26
 
 // Most common relay modules are active LOW.
-// If your relay works in the opposite way, change this to false.
+// Change to false if your relay works in the opposite way.
 #define RELAY_ACTIVE_LOW true
 
-// -------------------- Irrigation settings --------------------
-// These are initial values. Calibrate the sensor and update these
-// values using the raw ADC readings printed to Serial Monitor.
-#define SOIL_DRY_ADC  3000
-#define SOIL_WET_ADC  1200
+
+// ============================================================
+// Soil Moisture Calibration
+// ============================================================
+//
+// Based on your measured sensor readings:
+//
+// Dry soil : ~1103 ADC
+// Wet soil : ~1030 ADC
+//
+// Higher ADC = drier
+// Lower ADC  = wetter
+//
+
+#define SOIL_DRY_ADC 1103
+#define SOIL_WET_ADC 1030
+
+// Take 100 ADC samples for every sensor reading.
+#define SOIL_ADC_SAMPLES 100
+
+
+// ============================================================
+// Irrigation Settings
+// ============================================================
 
 #define PUMP_ON_THRESHOLD  30
 #define PUMP_OFF_THRESHOLD 60
 
-// -------------------- Runtime variables --------------------
+
+// ============================================================
+// Runtime Variables
+// ============================================================
+
 float soilMoisture = 0.0;
 int soilRaw = 0;
+
 bool pumpState = false;
 bool autoMode = false;
 
-// Convert logical pump state to the electrical relay signal.
+
+// ============================================================
+// Pump Control
+// ============================================================
+
 void setPump(bool on) {
+
   pumpState = on;
 
   if (RELAY_ACTIVE_LOW) {
@@ -55,21 +87,34 @@ void setPump(bool on) {
   Serial.println(on ? "ON" : "OFF");
 }
 
-// Read and average the soil sensor to reduce ADC noise.
+
+// ============================================================
+// Soil Sensor
+// ============================================================
+
+// Read the soil sensor using 100 ADC samples.
 int readSoilRaw() {
-  const int samples = 10;
+
   long total = 0;
 
-  for (int i = 0; i < samples; i++) {
+  for (int i = 0; i < SOIL_ADC_SAMPLES; i++) {
+
     total += analogRead(SOIL_SENSOR_PIN);
+
     delay(5);
   }
 
-  return total / samples;
+  return total / SOIL_ADC_SAMPLES;
 }
 
-// Convert the calibrated raw ADC value to a 0-100% moisture value.
+
+// Convert calibrated ADC value to moisture percentage.
 float calculateMoisture(int raw) {
+
+  if (SOIL_DRY_ADC == SOIL_WET_ADC) {
+    return 0.0;
+  }
+
   float percentage =
       ((float)(SOIL_DRY_ADC - raw) * 100.0) /
       (float)(SOIL_DRY_ADC - SOIL_WET_ADC);
@@ -77,25 +122,52 @@ float calculateMoisture(int raw) {
   return constrain(percentage, 0.0, 100.0);
 }
 
+
+// ============================================================
+// Automatic Irrigation
+// ============================================================
+
 void controlAutomaticIrrigation() {
+
   if (!autoMode) {
     return;
   }
 
   // Hysteresis prevents rapid relay switching.
   if (!pumpState && soilMoisture <= PUMP_ON_THRESHOLD) {
+
     setPump(true);
-    Serial.println("Automatic irrigation: soil is dry.");
+
+    Serial.println(
+      "Automatic irrigation: soil is dry."
+    );
   }
+
   else if (pumpState && soilMoisture >= PUMP_OFF_THRESHOLD) {
+
     setPump(false);
-    Serial.println("Automatic irrigation: soil moisture is sufficient.");
+
+    Serial.println(
+      "Automatic irrigation: soil moisture is sufficient."
+    );
   }
 }
 
+
+// ============================================================
+// Sensor Data + Blynk
+// ============================================================
+
 void sendSensorData() {
+
   soilRaw = readSoilRaw();
+
   soilMoisture = calculateMoisture(soilRaw);
+
+  // Blynk virtual pins
+  // V0 = Soil moisture %
+  // V3 = Pump status
+  // V6 = Raw ADC
 
   Blynk.virtualWrite(V0, soilMoisture);
   Blynk.virtualWrite(V3, pumpState ? 1 : 0);
@@ -103,111 +175,221 @@ void sendSensorData() {
 
   controlAutomaticIrrigation();
 
-  Serial.println("\n----- Irrigation Data -----");
-  Serial.printf("Soil ADC     : %d\n", soilRaw);
-  Serial.printf("Soil Moisture: %.1f %%\n", soilMoisture);
+
+  Serial.println();
+  Serial.println("========== Irrigation Data ==========");
+
+  Serial.print("Soil ADC (100 samples): ");
+  Serial.println(soilRaw);
+
+  Serial.print("Soil Moisture: ");
+  Serial.print(soilMoisture, 1);
+  Serial.println(" %");
+
   Serial.print("Pump         : ");
   Serial.println(pumpState ? "ON" : "OFF");
+
   Serial.print("Mode         : ");
   Serial.println(autoMode ? "AUTO" : "MANUAL");
-  Serial.println("---------------------------");
+
+  Serial.println("=====================================");
 }
+
+
+// ============================================================
+// Blynk Controls
+// ============================================================
 
 // V4 = Manual pump control
 BLYNK_WRITE(V4) {
+
   if (autoMode) {
-    Serial.println("Manual pump command ignored: AUTO mode is active.");
+
+    Serial.println(
+      "Manual pump command ignored: AUTO mode is active."
+    );
+
     return;
   }
 
   setPump(param.asInt() != 0);
 }
 
-// V5 = Auto/Manual mode
+
+// V5 = Auto / Manual mode
+//
 // 0 = MANUAL
 // 1 = AUTO
+
 BLYNK_WRITE(V5) {
+
   autoMode = param.asInt() != 0;
 
   Serial.print("Irrigation mode changed to: ");
-  Serial.println(autoMode ? "AUTO" : "MANUAL");
+
+  Serial.println(
+    autoMode ? "AUTO" : "MANUAL"
+  );
 
   if (autoMode) {
-    // Immediately evaluate the current moisture level.
     controlAutomaticIrrigation();
   }
 }
 
-// V6 = raw soil ADC value
+
+// ============================================================
+// Blynk Connected
+// ============================================================
 
 BLYNK_CONNECTED() {
+
   Serial.println("Blynk connected!");
+
   Blynk.syncVirtual(V4, V5);
 }
 
+
+// ============================================================
+// Setup
+// ============================================================
+
 void setup() {
+
   Serial.begin(115200);
+
   delay(1000);
 
-  Serial.println("\n==============================");
+
+  Serial.println();
+  Serial.println("==============================");
   Serial.println("ESP32 Water Irrigation");
   Serial.println("==============================");
 
-  // ESP32 ADC configuration.
+
+  // ----------------------------------------------------------
+  // ESP32 ADC Configuration
+  // ----------------------------------------------------------
+
   analogReadResolution(12);
-  analogSetPinAttenuation(SOIL_SENSOR_PIN, ADC_11db);
+
+  analogSetPinAttenuation(
+    SOIL_SENSOR_PIN,
+    ADC_11db
+  );
+
+
+  // ----------------------------------------------------------
+  // Pump / Relay
+  // ----------------------------------------------------------
 
   pinMode(PUMP_PIN, OUTPUT);
 
   // Safe startup: pump OFF.
+
   if (RELAY_ACTIVE_LOW) {
     digitalWrite(PUMP_PIN, HIGH);
   } else {
     digitalWrite(PUMP_PIN, LOW);
   }
 
+
+  // ----------------------------------------------------------
+  // WiFiManager
+  // ----------------------------------------------------------
+
   WiFi.mode(WIFI_STA);
+
   WiFiManager wm;
+
   wm.setConfigPortalTimeout(180);
 
   Serial.println("Starting WiFiManager...");
 
+
   if (!wm.autoConnect("ESP32-Irrigation")) {
-    Serial.println("WiFiManager failed. Restarting...");
+
+    Serial.println(
+      "WiFiManager failed. Restarting..."
+    );
+
     delay(3000);
+
     ESP.restart();
   }
 
+
   Serial.println("Wi-Fi connected!");
+
   Serial.print("IP Address: ");
   Serial.println(WiFi.localIP());
+
   Serial.print("RSSI: ");
   Serial.print(WiFi.RSSI());
   Serial.println(" dBm");
 
+
+  // ----------------------------------------------------------
+  // Blynk
+  // ----------------------------------------------------------
+
   Serial.println("Connecting to Blynk...");
+
   Blynk.config(BLYNK_AUTH_TOKEN);
 
+
   if (Blynk.connect(10000)) {
+
     Serial.println("Blynk connected!");
+
   } else {
-    Serial.println("Blynk connection failed.");
+
+    Serial.println(
+      "Blynk connection failed."
+    );
   }
 
+
+  // ----------------------------------------------------------
+  // mDash
+  // ----------------------------------------------------------
+
   Serial.println("Starting mDash...");
+
   mDashBegin(MDASH_DEVICE_PASSWORD);
+
   Serial.println("mDash initialized.");
 
-  // Read sensors every 2 seconds.
-  timer.setInterval(2000L, sendSensorData);
 
+  // ----------------------------------------------------------
+  // Sensor Timer
+  // ----------------------------------------------------------
+
+  // 100 ADC samples x 5 ms = ~500 ms sensor acquisition.
+  // Run the complete measurement every 2 seconds.
+  timer.setInterval(
+    2000L,
+    sendSensorData
+  );
+
+
+  Serial.println();
   Serial.println("System ready.");
+  Serial.println("Soil sensor: GPIO 34");
+  Serial.println("ADC samples: 100");
   Serial.println("Pump starts OFF.");
   Serial.println("Irrigation mode starts in MANUAL.");
 }
 
+
+// ============================================================
+// Main Loop
+// ============================================================
+
 void loop() {
+
   Blynk.run();
+
   timer.run();
+
   delay(10);
 }
