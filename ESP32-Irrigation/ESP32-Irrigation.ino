@@ -22,8 +22,9 @@ BlynkTimer timer;
 // Hardware
 // ============================================================
 
-#define SOIL_SENSOR_PIN 34
-#define PUMP_PIN        26
+#define SOIL_SENSOR_1_PIN 34
+#define SOIL_SENSOR_2_PIN 35
+#define PUMP_PIN          26
 
 // Most common relay modules are active LOW.
 // Change to false if your relay works in the opposite way.
@@ -41,8 +42,11 @@ BlynkTimer timer;
 // Lower ADC  = wetter
 //
 
-#define SOIL_DRY_ADC 1103
-#define SOIL_WET_ADC 1030
+// Calibrate each sensor independently using its own dry/wet readings.
+#define SOIL1_DRY_ADC 1103
+#define SOIL1_WET_ADC 1030
+#define SOIL2_DRY_ADC 1103  // Update after calibrating Sensor 2
+#define SOIL2_WET_ADC 1030  // Update after calibrating Sensor 2
 
 // Keep 100 samples per measurement.
 // Sampling is NON-BLOCKING so mDash/Blynk remain responsive.
@@ -62,8 +66,10 @@ BlynkTimer timer;
 // Runtime Variables
 // ============================================================
 
-float soilMoisture = 0.0;
-int soilRaw = 0;
+float soilMoisture1 = 0.0;
+float soilMoisture2 = 0.0;
+int soilRaw1 = 0;
+int soilRaw2 = 0;
 
 bool pumpState = false;
 bool autoMode = false;
@@ -71,7 +77,8 @@ bool autoMode = false;
 // Non-blocking ADC sampler
 bool samplingSoil = false;
 int soilSampleCount = 0;
-long soilSampleTotal = 0;
+long soilSampleTotal1 = 0;
+long soilSampleTotal2 = 0;
 unsigned long lastSoilSampleMs = 0;
 
 
@@ -101,15 +108,15 @@ void setPump(bool on) {
 // Soil Moisture
 // ============================================================
 
-float calculateMoisture(int raw) {
+float calculateMoisture(int raw, int dryAdc, int wetAdc) {
 
-  if (SOIL_DRY_ADC == SOIL_WET_ADC) {
+  if (dryAdc == wetAdc) {
     return 0.0;
   }
 
   float percentage =
-      ((float)(SOIL_DRY_ADC - raw) * 100.0) /
-      (float)(SOIL_DRY_ADC - SOIL_WET_ADC);
+      ((float)(dryAdc - raw) * 100.0) /
+      (float)(dryAdc - wetAdc);
 
   return constrain(percentage, 0.0, 100.0);
 }
@@ -120,7 +127,8 @@ void startSoilSampling() {
 
   samplingSoil = true;
   soilSampleCount = 0;
-  soilSampleTotal = 0;
+  soilSampleTotal1 = 0;
+  soilSampleTotal2 = 0;
   lastSoilSampleMs = millis();
 
   Serial.println("Starting soil measurement (100 samples)...");
@@ -143,13 +151,17 @@ void processSoilSampling() {
 
   lastSoilSampleMs = now;
 
-  soilSampleTotal += analogRead(SOIL_SENSOR_PIN);
+  // Sample both separate areas during the same non-blocking interval.
+  soilSampleTotal1 += analogRead(SOIL_SENSOR_1_PIN);
+  soilSampleTotal2 += analogRead(SOIL_SENSOR_2_PIN);
   soilSampleCount++;
 
   if (soilSampleCount >= SOIL_ADC_SAMPLES) {
 
-    soilRaw = soilSampleTotal / SOIL_ADC_SAMPLES;
-    soilMoisture = calculateMoisture(soilRaw);
+    soilRaw1 = soilSampleTotal1 / SOIL_ADC_SAMPLES;
+    soilRaw2 = soilSampleTotal2 / SOIL_ADC_SAMPLES;
+    soilMoisture1 = calculateMoisture(soilRaw1, SOIL1_DRY_ADC, SOIL1_WET_ADC);
+    soilMoisture2 = calculateMoisture(soilRaw2, SOIL2_DRY_ADC, SOIL2_WET_ADC);
 
     samplingSoil = false;
 
@@ -157,22 +169,27 @@ void processSoilSampling() {
     controlAutomaticIrrigation();
 
     // Blynk virtual pins:
-    // V0 = Soil moisture %
-    // V3 = Pump status
-    // V6 = Raw ADC
-
-    Blynk.virtualWrite(V0, soilMoisture);
+    // V0 = Area 1 moisture %, V3 = Pump status, V6 = Area 1 raw ADC
+    // V7 = Area 2 moisture %, V8 = Area 2 raw ADC
+    Blynk.virtualWrite(V0, soilMoisture1);
     Blynk.virtualWrite(V3, pumpState ? 1 : 0);
-    Blynk.virtualWrite(V6, soilRaw);
+    Blynk.virtualWrite(V6, soilRaw1);
+    Blynk.virtualWrite(V7, soilMoisture2);
+    Blynk.virtualWrite(V8, soilRaw2);
 
     Serial.println();
     Serial.println("========== Irrigation Data ==========");
 
-    Serial.print("Soil ADC (100 samples): ");
-    Serial.println(soilRaw);
+    Serial.print("Area 1 ADC (100 samples): ");
+    Serial.println(soilRaw1);
+    Serial.print("Area 1 Moisture: ");
+    Serial.print(soilMoisture1, 1);
+    Serial.println(" %");
 
-    Serial.print("Soil Moisture: ");
-    Serial.print(soilMoisture, 1);
+    Serial.print("Area 2 ADC (100 samples): ");
+    Serial.println(soilRaw2);
+    Serial.print("Area 2 Moisture: ");
+    Serial.print(soilMoisture2, 1);
     Serial.println(" %");
 
     Serial.print("Pump         : ");
@@ -197,7 +214,9 @@ void controlAutomaticIrrigation() {
   }
 
   // Hysteresis prevents rapid relay switching.
-  if (!pumpState && soilMoisture <= PUMP_ON_THRESHOLD) {
+  // One pump serves both areas: start if either area is dry.
+  if (!pumpState &&
+      (soilMoisture1 <= PUMP_ON_THRESHOLD || soilMoisture2 <= PUMP_ON_THRESHOLD)) {
 
     setPump(true);
 
@@ -206,7 +225,10 @@ void controlAutomaticIrrigation() {
     );
   }
 
-  else if (pumpState && soilMoisture >= PUMP_OFF_THRESHOLD) {
+  // Stop only after both areas reach the target moisture.
+  else if (pumpState &&
+           soilMoisture1 >= PUMP_OFF_THRESHOLD &&
+           soilMoisture2 >= PUMP_OFF_THRESHOLD) {
 
     setPump(false);
 
@@ -309,10 +331,8 @@ void setup() {
 
   analogReadResolution(12);
 
-  analogSetPinAttenuation(
-    SOIL_SENSOR_PIN,
-    ADC_11db
-  );
+  analogSetPinAttenuation(SOIL_SENSOR_1_PIN, ADC_11db);
+  analogSetPinAttenuation(SOIL_SENSOR_2_PIN, ADC_11db);
 
 
   // ----------------------------------------------------------
@@ -409,8 +429,9 @@ void setup() {
 
   Serial.println();
   Serial.println("System ready.");
-  Serial.println("Soil sensor : GPIO 34");
-  Serial.println("Pump relay  : GPIO 26");
+  Serial.println("Area 1 sensor: GPIO 34 (Blynk V0, raw V6)");
+  Serial.println("Area 2 sensor: GPIO 35 (Blynk V7, raw V8)");
+  Serial.println("Single pump  : GPIO 26");
   Serial.println("ADC samples : 100");
   Serial.println("Sampling    : non-blocking");
   Serial.println("Pump starts : OFF");
