@@ -1,171 +1,130 @@
 # ESP32 Smart Water Irrigation System
 
-An IoT-based smart water irrigation controller built around the ESP32 for monitoring irrigation conditions, controlling a water pump, and providing remote device management.
+An ESP32-based IoT irrigation controller for monitoring **two separate soil areas** and controlling one shared water pump. It combines Wi-Fi provisioning with WiFiManager, remote monitoring and control through Blynk, and remote device management through mDash.
+
+> **Current setup:** two analog soil-moisture sensors (GPIO 34 and 35) and one relay-controlled pump (GPIO 26). Because both areas share one pump, automatic watering starts when either area is dry and stops only when both areas reach the configured moisture target.
 
 ## Features
 
-- Wi-Fi provisioning with WiFiManager
-- Real-time monitoring with Blynk
-- Soil moisture monitoring
-- Temperature monitoring
-- Water-level monitoring
-- Remote pump ON/OFF control
-- mDash device management and FOTA
-- TLS-enabled mDash communication
-- Serial diagnostics
-- Expandable sensor architecture
-
-## System Architecture
-
-```text
-Sensors ──> ESP32 ──> Blynk Cloud
-             │
-             ├──> Pump / Relay
-             │
-             └──> mDash Cloud
-                  Device Management / FOTA
-```
-
-### Software Architecture
-
-```text
-ESP32
- ├── WiFiManager
- │    └── Wi-Fi provisioning / configuration
- ├── Blynk
- │    ├── Sensor monitoring
- │    └── Pump control
- └── mDash
-      ├── Device management
-      └── FOTA
-```
+- Wi-Fi setup through WiFiManager; no Wi-Fi credentials hard-coded in the firmware
+- Two soil-moisture sensors sampled and reported separately
+- 100 ADC samples per measurement, collected without a long blocking delay
+- Blynk dashboard readings for moisture, raw ADC values, pump status, and control mode
+- Manual pump control and automatic irrigation mode
+- Separate start/stop moisture thresholds (hysteresis) to reduce relay chatter
+- mDash device management and firmware-update integration
+- Built-in Mongoose TLS configuration
+- Local secrets file excluded from Git
 
 ## Hardware
 
-### Main Controller
+### Required for the current build
+
 - ESP32 Dev Module
+- 2 analog soil-moisture sensors compatible with the ESP32's 3.3 V logic
+- 1 relay module or appropriately rated MOSFET driver
+- 1 DC water pump
+- External power supply suitable for the pump
+- Tubing and connecting wires
+- USB cable/power supply for the ESP32
 
-### Planned / Supported Peripherals
-- Soil moisture sensor
-- Temperature sensor
-- Water-level sensor
-- Relay module or MOSFET pump driver
-- DC water pump
-- Suitable external pump power supply
-- Optional status indicators
+### Wiring
 
-> **Important:** Never drive a water pump directly from an ESP32 GPIO. Use an appropriately rated relay, MOSFET driver, or motor driver with suitable protection.
-
-## Pin Configuration
-
-| ESP32 GPIO | Function | Direction |
-|---:|---|---|
-| GPIO 26 | Pump control | Output |
-
-### Blynk Virtual Pins
-
-| Virtual Pin | Function | Data Type |
+| Component | ESP32 connection | Notes |
 |---|---|---|
-| V0 | Soil moisture | Double |
-| V1 | Temperature | Double |
-| V2 | Water level | Integer |
-| V3 | Pump status | Integer |
-| V4 | Pump control | Integer |
+| Area 1 moisture sensor AO | GPIO 34 | Analog input |
+| Area 2 moisture sensor AO | GPIO 35 | Analog input |
+| Both sensor VCC | Suitable sensor supply | Use 3.3 V when required by the sensor; keep output within ESP32 ADC limits |
+| Both sensor GND | ESP32 GND | Common ground for sensor readings |
+| Relay control input | GPIO 26 | Firmware defaults to active-LOW relay logic |
+| Relay/pump contacts | Pump supply circuit | Follow the relay module ratings and pump supply requirements |
 
-The current firmware uses demo sensor values until the physical sensors are integrated:
+**Safety:** Never power the pump from an ESP32 GPIO. Switch the pump using a correctly rated relay/driver and an appropriate external supply. Check the relay's active level before connecting the pump. Do not apply 5 V to an ESP32 GPIO or ADC input.
 
-- Soil moisture: 65%
-- Temperature: 28.5°C
-- Water level: 80%
+## Pin configuration
 
-## Blynk
+| GPIO | Function |
+|---:|---|
+| 34 | Area 1 soil-moisture analog input |
+| 35 | Area 2 soil-moisture analog input |
+| 26 | Pump relay control |
 
-Blynk provides live monitoring and remote pump control.
+The firmware uses 12-bit ADC readings and `ADC_11db` attenuation. ADC values and moisture percentages depend on the sensor and the soil; calibrate each sensor independently.
 
-Pump control flow:
+## Blynk setup
 
-```text
-Blynk App
-   │ V4
-   ▼
- ESP32
-   │
-   ▼
- GPIO 26
-   │
-   ▼
- Relay / MOSFET Driver
-   │
-   ▼
- Water Pump
-```
+Create a Blynk template/device and add datastreams matching these virtual pins:
 
-The firmware uses `Blynk.config()` after WiFiManager establishes Wi-Fi, preventing Blynk from taking over Wi-Fi provisioning.
+| Virtual pin | Function | Suggested data type |
+|---|---|---|
+| V0 | Area 1 moisture (%) | Double |
+| V3 | Pump status (0 = OFF, 1 = ON) | Integer |
+| V4 | Manual pump command (0 = OFF, 1 = ON) | Integer |
+| V5 | Mode (0 = MANUAL, 1 = AUTO) | Integer |
+| V6 | Area 1 raw ADC average | Integer |
+| V7 | Area 2 moisture (%) | Double |
+| V8 | Area 2 raw ADC average | Integer |
 
-## WiFiManager
+Suggested widgets:
+- Gauges or value displays for V0 and V7
+- Value displays for V6 and V8 when calibrating
+- Switch for V4
+- Switch for V5
+- LED/value display for V3
 
-WiFiManager handles initial Wi-Fi configuration without hard-coding Wi-Fi credentials.
+The firmware restores V4 and V5 from Blynk when it reconnects. Manual pump commands are ignored while AUTO mode is active.
 
-1. Power on the ESP32.
-2. If credentials are unavailable, the ESP32 starts a configuration portal.
-3. Connect to the `ESP32-Irrigation` access point.
-4. Select the Wi-Fi network and enter its password.
-5. ESP32 connects to the network.
-6. Blynk and mDash are initialized.
+## Automatic irrigation behavior
 
-The current configuration portal timeout is 180 seconds.
-
-## mDash and FOTA
-
-mDash is used for cloud-based device management and firmware updates.
-
-The project uses:
-- mDash device management
-- WebSocket Secure (WSS)
-- Built-in Mongoose TLS
-- FOTA capability
-
-The repository includes the Mongoose configuration used by the project:
-
-```text
-ESP32-Irrigation/
-└── mongoose_config.h
-```
-
-Configuration:
+Default settings in `ESP32-Irrigation.ino`:
 
 ```cpp
-#define MG_ARCH MG_ARCH_ESP32
-#define MG_TLS MG_TLS_BUILTIN
-#define MG_LOG_LEVEL 0
+#define PUMP_ON_THRESHOLD  30
+#define PUMP_OFF_THRESHOLD 60
 ```
 
-`MG_LOG_LEVEL 0` suppresses verbose Mongoose/mDash diagnostic output while keeping the application's own Serial messages available.
+The firmware calculates moisture as a percentage from each sensor's dry and wet ADC calibration values. With the default calibration, a higher ADC reading means drier soil and a lower reading means wetter soil.
 
-## Software Requirements
+- **Pump starts:** when AUTO mode is enabled, the pump is OFF, and either area reads at or below 30%.
+- **Pump stops:** when the pump is ON and both areas read at or above 60%.
+- **MANUAL mode:** V4 controls the pump directly.
+- **Startup:** the pump is initialized OFF.
+
+These thresholds are starting values; tune them for your sensors, soil, and plants. With one shared pump, this logic cannot water each area independently. Independent watering requires a separate pump or a separately controlled valve for each area.
+
+## Sensor calibration
+
+The firmware currently defines these starting values:
+
+```cpp
+#define SOIL1_DRY_ADC 1103
+#define SOIL1_WET_ADC 1030
+#define SOIL2_DRY_ADC 1103
+#define SOIL2_WET_ADC 1030
+```
+
+Sensor 1's values are based on initial readings. Sensor 2's values are placeholders and must be measured independently.
+
+1. Upload the firmware and open Serial Monitor at **115200 baud**.
+2. Record the raw ADC value for each sensor in dry soil/air as appropriate for your intended calibration method.
+3. Record the raw ADC value for each sensor in thoroughly wet soil.
+4. Update that sensor's `DRY_ADC` and `WET_ADC` constants.
+5. Confirm that the reported percentage rises as the soil gets wetter before enabling automatic mode.
+
+The firmware averages 100 samples per measurement. Calibration readings can vary with sensor type, supply voltage, soil composition, and sensor aging.
+
+## Software requirements
 
 - Arduino IDE 2.x
-- ESP32 board package by Espressif Systems
+- ESP32 board support package by Espressif Systems
 - WiFiManager
-- Blynk
-- ArduinoJson
-- mDash
+- Blynk library for ESP32
+- mDash library and its compatible Mongoose dependency/configuration
+- ArduinoJson if required by the installed library versions
 
-The ESP32 core provides WiFi, WebServer, and Update functionality.
+The project includes `ESP32-Irrigation/mongoose_config.h` with the Mongoose ESP32 and built-in TLS settings. Library versions can affect compilation and cloud connectivity.
 
-## Project Structure
-
-```text
-water-irrigation/
-│
-├── ESP32-Irrigation/
-│   ├── ESP32-Irrigation.ino
-│   └── mongoose_config.h
-│
-└── README.md
-```
-
-## Getting Started
+## Setup
 
 ### 1. Clone the repository
 
@@ -174,150 +133,105 @@ git clone https://github.com/abhijarvis/water-irrigation.git
 cd water-irrigation
 ```
 
-### 2. Open the firmware
+### 2. Create your local secrets file
 
-Open `ESP32-Irrigation/ESP32-Irrigation.ino` in Arduino IDE.
-
-### 3. Configure Blynk
-
-Replace the placeholders with your Blynk credentials:
+Create `ESP32-Irrigation/secrets.h` next to `ESP32-Irrigation.ino`. This file is intentionally excluded from Git by `.gitignore`. Add your own Blynk template/device credentials and mDash device password using the macro names expected by your installed Blynk and mDash libraries. For example:
 
 ```cpp
+#pragma once
+
 #define BLYNK_TEMPLATE_ID   "YOUR_TEMPLATE_ID"
 #define BLYNK_TEMPLATE_NAME "ESP32 Irrigation"
 #define BLYNK_AUTH_TOKEN    "YOUR_BLYNK_AUTH_TOKEN"
-```
-
-### 4. Configure mDash
-
-Set the appropriate device password:
-
-```cpp
 #define MDASH_DEVICE_PASSWORD "YOUR_MDASH_DEVICE_PASSWORD"
 ```
 
-### 5. Select the board
+Keep this file private. Never commit real Wi-Fi passwords, Blynk tokens, mDash passwords, or other credentials.
 
-Arduino IDE → Board → ESP32 Dev Module
+### 3. Open and configure the sketch
 
-### 6. Upload
+Open `ESP32-Irrigation/ESP32-Irrigation.ino` in Arduino IDE. Install the required libraries and select **ESP32 Dev Module**.
 
-Select the ESP32 USB serial port, compile, and upload the firmware.
+### 4. Upload and provision Wi-Fi
 
-### 7. Serial Monitor
+Upload the sketch and open Serial Monitor at **115200 baud**. If Wi-Fi has not been configured, the ESP32 starts a WiFiManager access point named `ESP32-Irrigation`. Connect to it and select your Wi-Fi network. The configuration portal timeout is 180 seconds.
 
-Use 115200 baud.
+### 5. Configure the Blynk dashboard
 
-Expected startup messages include:
+Create the datastreams listed above and add widgets for both moisture readings, pump status, manual control, and AUTO/MANUAL mode.
 
-```text
-ESP32 Water Irrigation
-Starting WiFiManager...
-Wi-Fi connected!
-Connecting to Blynk...
-Blynk connected!
-Starting mDash...
-mDash initialized.
-System ready.
-```
+### 6. Verify before automatic operation
 
-## Security
+Check both sensors' raw readings and calibration first. Test relay operation without risking dry running or flooding, and verify that the relay's active level matches `RELAY_ACTIVE_LOW` in the firmware.
 
-**Never commit production credentials to GitHub.**
+## mDash and TLS
 
-Do not commit:
-- Blynk authentication tokens
-- mDash passwords
-- Wi-Fi passwords
-- API keys
-- Cloud credentials
-
-The repository intentionally uses placeholders in the firmware.
-
-## Development Status
-
-| Component | Status |
-|---|---|
-| ESP32 firmware | 🟢 Implemented |
-| WiFiManager | 🟢 Implemented |
-| Blynk connection | 🟢 Implemented |
-| Blynk pump control | 🟢 Implemented |
-| Blynk dashboard | 🟢 Implemented with demo data |
-| mDash integration | 🟢 Implemented |
-| mDash TLS configuration | 🟢 Configured |
-| Soil moisture hardware | 🟡 To be integrated |
-| Temperature hardware | 🟡 To be integrated |
-| Water-level hardware | 🟡 To be integrated |
-| Pump hardware | 🟡 To be integrated |
-| Automatic irrigation logic | 🟡 Planned |
-| Sensor calibration | 🟡 Planned |
-
-## Future Enhancements
-
-- Automatic irrigation based on soil moisture
-- Configurable irrigation schedules
-- Minimum/maximum water-level protection
-- Low-water and dry-soil alerts
-- Historical sensor data
-- Weather-aware irrigation
-- Improved Blynk dashboard
-- Remote firmware updates
-- Pump dry-run protection
-- Pump current monitoring
-- Power/failure recovery handling
-- Adaptive irrigation logic
-- Water and energy consumption monitoring
-
-## Troubleshooting
-
-### ESP32 does not connect to Wi-Fi
-1. Restart the ESP32.
-2. Connect to the `ESP32-Irrigation` configuration network.
-3. Re-enter Wi-Fi credentials.
-4. Check Serial Monitor at 115200 baud.
-
-### Blynk does not connect
-Check:
-- Blynk Template ID
-- Blynk Template Name
-- Blynk Auth Token
-- Internet connectivity
-- Blynk datastream configuration
-
-The firmware uses `Blynk.config(BLYNK_AUTH_TOKEN)` and `Blynk.connect(10000)` because WiFiManager handles Wi-Fi.
-
-### mDash shows TLS errors
-Verify:
+The project calls `mDashBegin(MDASH_DEVICE_PASSWORD)` and includes `mongoose_config.h` with:
 
 ```cpp
 #define MG_ARCH MG_ARCH_ESP32
 #define MG_TLS MG_TLS_BUILTIN
+#define MG_LOG_LEVEL 0
 ```
 
-Also verify that the installed mDash/Mongoose version is compatible with this configuration.
+mDash connectivity and firmware-update behavior depend on compatible versions of the mDash and Mongoose libraries and the correct device configuration. Confirm successful device connectivity in the mDash console; the presence of TLS settings alone does not prove that a cloud session is healthy.
 
-### Pump does not switch
-Check:
-- GPIO 26 wiring
-- Relay/MOSFET driver power
-- Common ground where required
-- Pump power supply
-- Relay trigger logic
+## Project structure
 
-Never connect the pump directly to GPIO 26.
+```text
+water-irrigation/
+├── .gitignore
+├── README.md
+└── ESP32-Irrigation/
+    ├── ESP32-Irrigation.ino
+    ├── mongoose_config.h
+    └── secrets.h              # local file; not committed
+```
 
-## License and Copyright
+## Troubleshooting
 
-Copyright © 2026 **Abhishek Pandit**.
+### Wi-Fi setup fails
+- Restart the ESP32 and look for the `ESP32-Irrigation` configuration network.
+- Re-enter the Wi-Fi credentials.
+- Check Serial Monitor at 115200 baud.
 
-This project is intended for personal development, experimentation, and IoT prototyping. Add an explicit open-source license before redistributing the project under an open-source license.
+### Blynk does not connect or values do not update
+- Check the template ID, template name, auth token, and internet connection.
+- Verify the virtual-pin datastreams and widget assignments.
+- Confirm the device is using the same Blynk template as the app dashboard.
+
+### Moisture percentage looks incorrect
+- Compare raw ADC readings on V6 and V8 or in Serial Monitor.
+- Calibrate each sensor separately; do not assume both sensors have identical dry/wet values.
+- Confirm sensor output voltage is safe for the ESP32.
+
+### Pump/relay does not switch
+- Verify GPIO 26 wiring, relay supply, pump supply, and relay trigger polarity.
+- The default is active-LOW (`RELAY_ACTIVE_LOW true`). Change it only after verifying the module's logic.
+- Never connect the pump directly to an ESP32 GPIO.
+
+### mDash TLS or connectivity problems
+- Confirm that the installed mDash/Mongoose library versions are compatible.
+- Verify the device password and network connectivity.
+- Review Serial Monitor output and the mDash device status; TLS configuration alone is not a connectivity test.
+
+## Development status
+
+| Component | Status |
+|---|---|
+| WiFiManager provisioning | Implemented in firmware |
+| Blynk integration and controls | Implemented in firmware; dashboard must be configured |
+| Two-sensor measurement | Implemented in firmware; hardware calibration required |
+| Shared-pump automatic logic | Implemented in firmware; validate thresholds and wiring before use |
+| Relay/pump hardware | Depends on your wiring and testing |
+| mDash integration | Present in firmware; verify live connectivity and FOTA on your device |
 
 ## Author
 
 **Abhishek Pandit**
 
-ESP32 • Embedded Systems • IoT • Automation
+ESP32 · Embedded Systems · IoT · Automation
 
 ---
 
-⭐ If you find this project useful, consider starring the repository.
+If you find this project useful, consider starring the repository.
