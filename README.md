@@ -48,6 +48,19 @@ flowchart LR
 
 > **Wiring note:** The diagram is a functional overview, not a pin-by-pin relay terminal drawing. Use the relay module's documented VCC/GND/IN pins and COM/NO/NC markings. Keep the pump on its correctly rated external supply; never power it from an ESP32 GPIO. Ensure sensor output voltage stays within ESP32 input limits. Share ground where required by the sensor/driver design.
 
+## Choose a firmware variant
+
+Two standalone Arduino sketches are available. Open **only one sketch folder at a time** in Arduino IDE.
+
+| Variant | Sketch | Sensor wiring | Blynk moisture pins |
+|---|---|---|---|
+| One sensor | [ESP32-Irrigation-1-Sensor.ino](ESP32-Irrigation-1-Sensor/ESP32-Irrigation-1-Sensor.ino) | One sensor AO → GPIO 34 | V0 = moisture, V6 = raw ADC |
+| Two sensors | [ESP32-Irrigation-2-Sensors.ino](ESP32-Irrigation-2-Sensors/ESP32-Irrigation-2-Sensors.ino) | Area 1 AO → GPIO 34; Area 2 AO → GPIO 35 | V0/V6 = Area 1; V7/V8 = Area 2 |
+
+Both variants use GPIO 26 for the shared pump relay, V3 for pump status, V4 for manual pump control, and V5 for AUTO/MANUAL mode. Both use the same WiFiManager, Blynk, and mDash integration.
+
+For either variant, create a private `secrets.h` in that variant's folder using the example in the setup section below. The file is ignored by Git. Calibrate the dry/wet ADC constants for the sensor or sensors you actually use.
+
 ## Features
 
 - Wi-Fi setup through WiFiManager; no Wi-Fi credentials hard-coded in the firmware
@@ -226,10 +239,14 @@ mDash connectivity and firmware-update behavior depend on compatible versions of
 water-irrigation/
 ├── .gitignore
 ├── README.md
-└── ESP32-Irrigation/
-    ├── ESP32-Irrigation.ino
-    ├── mongoose_config.h
-    └── secrets.h              # local file; not committed
+├── ESP32-Irrigation/
+│   ├── ESP32-Irrigation.ino   # main two-sensor firmware
+│   ├── mongoose_config.h
+│   └── secrets.h              # local file; not committed
+├── ESP32-Irrigation-1-Sensor/
+│   └── ESP32-Irrigation-1-Sensor.ino
+└── ESP32-Irrigation-2-Sensors/
+    └── ESP32-Irrigation-2-Sensors.ino
 ```
 
 ## Troubleshooting
