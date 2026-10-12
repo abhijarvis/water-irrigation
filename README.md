@@ -4,6 +4,50 @@ An ESP32-based IoT irrigation controller for monitoring **two separate soil area
 
 > **Current setup:** two analog soil-moisture sensors (GPIO 34 and 35) and one relay-controlled pump (GPIO 26). Because both areas share one pump, automatic watering starts when either area is dry and stops only when both areas reach the configured moisture target.
 
+
+## System architecture diagram
+
+The ESP32 reads both soil-moisture sensors, applies the AUTO/MANUAL logic, and controls one shared pump through the relay. Readings and controls are exposed through Blynk; Wi-Fi is provisioned with WiFiManager and device management uses mDash.
+
+```mermaid
+flowchart TD
+    S1["Area 1 soil sensor<br/>AO → GPIO 34"] --> ESP["ESP32 controller"]
+    S2["Area 2 soil sensor<br/>AO → GPIO 35"] --> ESP
+    WM["WiFiManager<br/>Wi-Fi provisioning"] <--> ESP
+    ESP <--> BK["Blynk cloud/app<br/>Moisture · ADC · Pump · Mode"]
+    ESP <--> MD["mDash<br/>Device management / FOTA"]
+    ESP --> R["Relay module<br/>GPIO 26"]
+    R --> P["DC water pump"]
+    PS["External pump power supply"] --> P
+    G["Common ground for ESP32 and sensors"] --- S1
+    G --- S2
+```
+
+## Wiring diagram
+
+```mermaid
+flowchart LR
+    subgraph Sensors
+      A["Area 1 sensor"] -- "AO" --> G34["ESP32 GPIO 34"]
+      B["Area 2 sensor"] -- "AO" --> G35["ESP32 GPIO 35"]
+      V["3.3 V / suitable sensor supply"] --> A
+      V --> B
+      GND["GND"] --- A
+      GND --- B
+    end
+    subgraph Pump control
+      G26["ESP32 GPIO 26"] --> IN["Relay IN"]
+      RV["Relay supply as required by module"] --> REL["Relay module"]
+      IN --> REL
+      REL --> CONTACTS["Relay COM/NO contacts"]
+      EXT["External pump supply"] --> CONTACTS
+      CONTACTS --> MOTOR["DC pump"]
+    end
+    EG["ESP32 GND"] --- GND
+```
+
+> **Wiring note:** The diagram is a functional overview, not a pin-by-pin relay terminal drawing. Use the relay module's documented VCC/GND/IN pins and COM/NO/NC markings. Keep the pump on its correctly rated external supply; never power it from an ESP32 GPIO. Ensure sensor output voltage stays within ESP32 input limits. Share ground where required by the sensor/driver design.
+
 ## Features
 
 - Wi-Fi setup through WiFiManager; no Wi-Fi credentials hard-coded in the firmware
