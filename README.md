@@ -7,7 +7,7 @@ An ESP32-based IoT irrigation controller for monitoring **two separate soil area
 
 ## System architecture diagram
 
-The ESP32 reads both soil-moisture sensors, applies the AUTO/MANUAL logic, and controls one shared pump through the relay. Readings and controls are exposed through Blynk; Wi-Fi is provisioned with WiFiManager and device management uses mDash.
+The ESP32 reads both soil-moisture sensors and controls a separate relay/pump for each area. Readings and controls are exposed through Blynk; Wi-Fi is provisioned with WiFiManager and device management uses mDash.
 
 ```mermaid
 flowchart TD
@@ -116,7 +116,7 @@ For either variant, create a private `secrets.h` in that variant's folder using 
 | 26 | Pump 1 relay control (Area 1) |
 | 27 | Pump 2 relay control (Area 2) |
 
-The firmware uses 12-bit ADC readings and `ADC_11db` attenuation. ADC values and moisture percentages depend on the sensor and the soil; calibrate each sensor independently.
+The firmware uses 12-bit ADC readings and `ADC_11db` attenuation. ADC values and moisture percentages depend on the sensor and the soil; calibrate each sensor independently. Both pumps start OFF, and automatic control waits until the first complete sensor measurement before making a decision.
 
 ## Blynk setup
 
@@ -159,7 +159,7 @@ The firmware calculates moisture as a percentage from each sensor's dry and wet 
 - **Pump 1 stops:** when Pump 1 is ON and Area 1 reaches at least 60%.
 - **Pump 2 starts:** when AUTO mode is enabled, Pump 2 is OFF, and Area 2 reads at or below 30%.
 - **Pump 2 stops:** when Pump 2 is ON and Area 2 reaches at least 60%.
-- **Run-time failsafe:** each pump is automatically stopped after 10 minutes of continuous operation; adjust `MAX_PUMP_RUNTIME_MS` to suit your setup.
+- **Run-time failsafe:** each pump is stopped and locked out after 10 minutes of continuous operation; adjust `MAX_PUMP_RUNTIME_MS` to suit your setup. The lockout remains until the ESP32 is rebooted, so investigate the cause before restarting.
 - **MANUAL mode:** V4 controls Pump 1 and V10 controls Pump 2 independently.
 - **Startup:** both pumps are initialized OFF.
 
@@ -284,6 +284,7 @@ water-irrigation/
 
 ### Pump/relay does not switch
 - Verify GPIO 26 for Pump 1 and GPIO 27 for Pump 2, relay supply, pump supplies, and relay trigger polarity.
+- If a pump timed out, its firmware lockout remains until reboot. Check the sensor calibration, water supply, tubing, and pump before restarting.
 - The default is active-LOW (`RELAY_ACTIVE_LOW true`). Change it only after verifying the module's logic.
 - Never connect the pump directly to an ESP32 GPIO.
 
