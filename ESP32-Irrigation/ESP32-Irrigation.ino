@@ -78,6 +78,13 @@ bool autoMode = false;
 bool hasSoilMeasurement = false;
 bool pump1TimedOut = false;
 bool pump2TimedOut = false;
+bool soilSensor1Fault = false;
+bool soilSensor2Fault = false;
+uint8_t sensor1RailCount = 0;
+uint8_t sensor2RailCount = 0;
+#define SENSOR_RAIL_LOW_ADC 20
+#define SENSOR_RAIL_HIGH_ADC 4075
+#define SENSOR_FAULT_CONFIRMATIONS 3
 #define MAX_PUMP_RUNTIME_MS (10UL * 60UL * 1000UL)
 unsigned long pump1StartedAtMs = 0;
 unsigned long pump2StartedAtMs = 0;
@@ -100,6 +107,10 @@ void writePumpOutput(uint8_t pin, bool on) {
 }
 
 void setPump1(bool on) {
+  if (on && (pump1TimedOut || soilSensor1Fault)) {
+    Serial.println("Pump 1 ON rejected: safety lockout is active.");
+    return;
+  }
   if (pump1State == on) return;
   pump1State = on;
   writePumpOutput(PUMP1_PIN, on);
@@ -110,6 +121,10 @@ void setPump1(bool on) {
 }
 
 void setPump2(bool on) {
+  if (on && (pump2TimedOut || soilSensor2Fault)) {
+    Serial.println("Pump 2 ON rejected: safety lockout is active.");
+    return;
+  }
   if (pump2State == on) return;
   pump2State = on;
   writePumpOutput(PUMP2_PIN, on);
@@ -178,6 +193,31 @@ void processSoilSampling() {
     soilRaw2 = soilSampleTotal2 / SOIL_ADC_SAMPLES;
     soilMoisture1 = calculateMoisture(soilRaw1, SOIL1_DRY_ADC, SOIL1_WET_ADC);
     soilMoisture2 = calculateMoisture(soilRaw2, SOIL2_DRY_ADC, SOIL2_WET_ADC);
+
+    // Repeated ADC rail readings often indicate a disconnected/failed sensor.
+    // Latch a fault after three consecutive complete measurement windows.
+    if (soilRaw1 <= SENSOR_RAIL_LOW_ADC || soilRaw1 >= SENSOR_RAIL_HIGH_ADC) {
+      if (sensor1RailCount < SENSOR_FAULT_CONFIRMATIONS) sensor1RailCount++;
+      if (sensor1RailCount >= SENSOR_FAULT_CONFIRMATIONS && !soilSensor1Fault) {
+        soilSensor1Fault = true;
+        Serial.println("SAFETY FAULT: Area 1 sensor ADC is at a rail. Pump 1 locked out until reboot.");
+        setPump1(false);
+      }
+    } else {
+      sensor1RailCount = 0;
+    }
+
+    if (soilRaw2 <= SENSOR_RAIL_LOW_ADC || soilRaw2 >= SENSOR_RAIL_HIGH_ADC) {
+      if (sensor2RailCount < SENSOR_FAULT_CONFIRMATIONS) sensor2RailCount++;
+      if (sensor2RailCount >= SENSOR_FAULT_CONFIRMATIONS && !soilSensor2Fault) {
+        soilSensor2Fault = true;
+        Serial.println("SAFETY FAULT: Area 2 sensor ADC is at a rail. Pump 2 locked out until reboot.");
+        setPump2(false);
+      }
+    } else {
+      sensor2RailCount = 0;
+    }
+
     hasSoilMeasurement = true;
 
     samplingSoil = false;
@@ -235,7 +275,7 @@ void controlAutomaticIrrigation() {
 
   // Hysteresis prevents rapid relay switching.
   // Each sensor controls only its matching pump.
-  if (!pump1State && !pump1TimedOut && soilMoisture1 <= PUMP_ON_THRESHOLD) {
+  if (!pump1State && !pump1TimedOut && !soilSensor1Fault && soilMoisture1 <= PUMP_ON_THRESHOLD) {
     setPump1(true);
     Serial.println("AUTO: Area 1 is dry; Pump 1 started.");
   } else if (pump1State && soilMoisture1 >= PUMP_OFF_THRESHOLD) {
@@ -243,7 +283,7 @@ void controlAutomaticIrrigation() {
     Serial.println("AUTO: Area 1 moisture target reached; Pump 1 stopped.");
   }
 
-  if (!pump2State && !pump2TimedOut && soilMoisture2 <= PUMP_ON_THRESHOLD) {
+  if (!pump2State && !pump2TimedOut && !soilSensor2Fault && soilMoisture2 <= PUMP_ON_THRESHOLD) {
     setPump2(true);
     Serial.println("AUTO: Area 2 is dry; Pump 2 started.");
   } else if (pump2State && soilMoisture2 >= PUMP_OFF_THRESHOLD) {
@@ -286,6 +326,11 @@ BLYNK_WRITE(V4) {
     return;
   }
 
+  if (soilSensor1Fault || pump1TimedOut) {
+    Blynk.virtualWrite(V4, 0);
+    Serial.println("Pump 1 manual command rejected: safety lockout is active.");
+    return;
+  }
   setPump1(param.asInt() != 0);
 }
 
@@ -293,6 +338,11 @@ BLYNK_WRITE(V10) {
   if (autoMode) {
     Serial.println("Pump 2 manual command ignored: AUTO mode is active.");
     Blynk.virtualWrite(V10, 0);
+    return;
+  }
+  if (soilSensor2Fault || pump2TimedOut) {
+    Blynk.virtualWrite(V10, 0);
+    Serial.println("Pump 2 manual command rejected: safety lockout is active.");
     return;
   }
   setPump2(param.asInt() != 0);
@@ -488,6 +538,8 @@ void loop() {
     Serial.println("SAFETY: Pump 2 stopped and locked out after maximum run time. Reboot after checking the system.");
   }
 
-  // No deliberate delay here.
-  // mDash/Blynk get maximum loop time.
+  // mDash Arduino client maintains its TLS session/reconnect internally after
+  // mDashBegin(); its documented API does not require a separate poll call.
+  // Keep this loop non-blocking so both mDash and Blynk can run responsively.
+  yield();
 }
