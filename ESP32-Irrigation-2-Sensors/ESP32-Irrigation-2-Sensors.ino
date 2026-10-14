@@ -86,8 +86,12 @@ uint8_t sensor2RailCount = 0;
 #define SENSOR_RAIL_HIGH_ADC 4075
 #define SENSOR_FAULT_CONFIRMATIONS 3
 #define MAX_PUMP_RUNTIME_MS (10UL * 60UL * 1000UL)
+// Minimum OFF time applies to automatic starts, reducing repeated cycling.
+#define MIN_PUMP_OFF_MS (30UL * 1000UL)
 unsigned long pump1StartedAtMs = 0;
 unsigned long pump2StartedAtMs = 0;
+unsigned long pump1LastOffAtMs = 0;
+unsigned long pump2LastOffAtMs = 0;
 
 // Non-blocking ADC sampler
 bool samplingSoil = false;
@@ -112,9 +116,15 @@ void setPump1(bool on) {
     return;
   }
   if (pump1State == on) return;
+  bool wasOn = pump1State;
   pump1State = on;
   writePumpOutput(PUMP1_PIN, on);
-  pump1StartedAtMs = on ? millis() : 0;
+  if (on) {
+    pump1StartedAtMs = millis();
+  } else {
+    pump1StartedAtMs = 0;
+    if (wasOn) pump1LastOffAtMs = millis();
+  }
   Blynk.virtualWrite(V3, pump1State ? 1 : 0);
   Serial.print("Pump 1 (Area 1): ");
   Serial.println(on ? "ON" : "OFF");
@@ -126,9 +136,15 @@ void setPump2(bool on) {
     return;
   }
   if (pump2State == on) return;
+  bool wasOn = pump2State;
   pump2State = on;
   writePumpOutput(PUMP2_PIN, on);
-  pump2StartedAtMs = on ? millis() : 0;
+  if (on) {
+    pump2StartedAtMs = millis();
+  } else {
+    pump2StartedAtMs = 0;
+    if (wasOn) pump2LastOffAtMs = millis();
+  }
   Blynk.virtualWrite(V9, pump2State ? 1 : 0);
   Serial.print("Pump 2 (Area 2): ");
   Serial.println(on ? "ON" : "OFF");
@@ -275,7 +291,15 @@ void controlAutomaticIrrigation() {
 
   // Hysteresis prevents rapid relay switching.
   // Each sensor controls only its matching pump.
-  if (!pump1State && !pump1TimedOut && !soilSensor1Fault && soilMoisture1 <= PUMP_ON_THRESHOLD) {
+  unsigned long now = millis();
+  bool pump1CooldownComplete =
+      pump1LastOffAtMs == 0 ||
+      (unsigned long)(now - pump1LastOffAtMs) >= MIN_PUMP_OFF_MS;
+  bool pump2CooldownComplete =
+      pump2LastOffAtMs == 0 ||
+      (unsigned long)(now - pump2LastOffAtMs) >= MIN_PUMP_OFF_MS;
+
+  if (!pump1State && pump1CooldownComplete && !pump1TimedOut && !soilSensor1Fault && soilMoisture1 <= PUMP_ON_THRESHOLD) {
     setPump1(true);
     Serial.println("AUTO: Area 1 is dry; Pump 1 started.");
   } else if (pump1State && soilMoisture1 >= PUMP_OFF_THRESHOLD) {
@@ -283,7 +307,7 @@ void controlAutomaticIrrigation() {
     Serial.println("AUTO: Area 1 moisture target reached; Pump 1 stopped.");
   }
 
-  if (!pump2State && !pump2TimedOut && !soilSensor2Fault && soilMoisture2 <= PUMP_ON_THRESHOLD) {
+  if (!pump2State && pump2CooldownComplete && !pump2TimedOut && !soilSensor2Fault && soilMoisture2 <= PUMP_ON_THRESHOLD) {
     setPump2(true);
     Serial.println("AUTO: Area 2 is dry; Pump 2 started.");
   } else if (pump2State && soilMoisture2 >= PUMP_OFF_THRESHOLD) {
@@ -377,8 +401,9 @@ BLYNK_CONNECTED() {
 
   Serial.println("Blynk connected!");
 
-  // Restore the last Blynk switch states.
-  Blynk.syncVirtual(V4, V5, V10);
+  // Restore only the AUTO/MANUAL mode. Do not restore old manual ON commands:
+  // a stale cloud switch state must not unexpectedly start a pump after reconnect.
+  Blynk.syncVirtual(V5);
 }
 
 
@@ -412,9 +437,12 @@ void setup() {
   // Pump / Relay
   // ----------------------------------------------------------
 
+  // Preload the OFF output level before enabling the GPIO output driver.
+  // This helps reduce startup glitches; hardware relay biasing may still be needed.
+  writePumpOutput(PUMP1_PIN, false);
+  writePumpOutput(PUMP2_PIN, false);
   pinMode(PUMP1_PIN, OUTPUT);
   pinMode(PUMP2_PIN, OUTPUT);
-  // Safe startup: both pumps OFF.
   writePumpOutput(PUMP1_PIN, false);
   writePumpOutput(PUMP2_PIN, false);
 
