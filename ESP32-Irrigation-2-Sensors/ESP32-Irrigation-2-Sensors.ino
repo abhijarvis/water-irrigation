@@ -401,9 +401,11 @@ BLYNK_CONNECTED() {
 
   Serial.println("Blynk connected!");
 
-  // Restore only the AUTO/MANUAL mode. Do not restore old manual ON commands:
-  // a stale cloud switch state must not unexpectedly start a pump after reconnect.
+  // Restore only the AUTO/MANUAL mode. Never restore old manual ON commands.
+  // Explicitly reset both manual widgets so their cloud state matches safe OFF outputs.
   Blynk.syncVirtual(V5);
+  Blynk.virtualWrite(V4, 0);
+  Blynk.virtualWrite(V10, 0);
 }
 
 
