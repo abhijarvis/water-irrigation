@@ -125,7 +125,9 @@ void setPump1(bool on) {
     pump1StartedAtMs = 0;
     if (wasOn) pump1LastOffAtMs = millis();
   }
-  Blynk.virtualWrite(V3, pump1State ? 1 : 0);
+  if (Blynk.connected()) {
+    Blynk.virtualWrite(V3, pump1State ? 1 : 0);
+  }
   Serial.print("Pump 1 (Area 1): ");
   Serial.println(on ? "ON" : "OFF");
 }
@@ -145,7 +147,9 @@ void setPump2(bool on) {
     pump2StartedAtMs = 0;
     if (wasOn) pump2LastOffAtMs = millis();
   }
-  Blynk.virtualWrite(V9, pump2State ? 1 : 0);
+  if (Blynk.connected()) {
+    Blynk.virtualWrite(V9, pump2State ? 1 : 0);
+  }
   Serial.print("Pump 2 (Area 2): ");
   Serial.println(on ? "ON" : "OFF");
 }
@@ -244,12 +248,15 @@ void processSoilSampling() {
     // Blynk virtual pins:
     // V0 = Area 1 moisture %, V3 = Pump status, V6 = Area 1 raw ADC
     // V7 = Area 2 moisture %, V8 = Area 2 raw ADC
-    Blynk.virtualWrite(V0, soilMoisture1);
-    Blynk.virtualWrite(V3, pump1State ? 1 : 0);
-    Blynk.virtualWrite(V9, pump2State ? 1 : 0);
-    Blynk.virtualWrite(V6, soilRaw1);
-    Blynk.virtualWrite(V7, soilMoisture2);
-    Blynk.virtualWrite(V8, soilRaw2);
+    // Local sensing/control continues even when the Blynk cloud is unavailable.
+    if (Blynk.connected()) {
+      Blynk.virtualWrite(V0, soilMoisture1);
+      Blynk.virtualWrite(V3, pump1State ? 1 : 0);
+      Blynk.virtualWrite(V9, pump2State ? 1 : 0);
+      Blynk.virtualWrite(V6, soilRaw1);
+      Blynk.virtualWrite(V7, soilMoisture2);
+      Blynk.virtualWrite(V8, soilRaw2);
+    }
 
     Serial.println();
     Serial.println("========== Irrigation Data ==========");
@@ -313,6 +320,26 @@ void controlAutomaticIrrigation() {
   } else if (pump2State && soilMoisture2 >= PUMP_OFF_THRESHOLD) {
     setPump2(false);
     Serial.println("AUTO: Area 2 moisture target reached; Pump 2 stopped.");
+  }
+}
+
+
+// ============================================================
+// Connectivity Maintenance
+// ============================================================
+
+// Called periodically; never changes local AUTO/MANUAL mode or pump states.
+// Wi-Fi reconnect uses saved credentials; Blynk gets a short bounded retry.
+void maintainCloudConnections() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("Wi-Fi offline; requesting reconnect with saved credentials.");
+    WiFi.reconnect();
+    return;
+  }
+
+  if (!Blynk.connected()) {
+    Serial.println("Blynk offline; attempting a short reconnect.");
+    Blynk.connect(250);
   }
 }
 
@@ -399,13 +426,23 @@ BLYNK_WRITE(V5) {
 
 BLYNK_CONNECTED() {
 
-  Serial.println("Blynk connected!");
+  Serial.println("Blynk connected; publishing current local state.");
 
-  // Restore only the AUTO/MANUAL mode. Never restore old manual ON commands.
-  // Explicitly reset both manual widgets so their cloud state matches safe OFF outputs.
-  Blynk.syncVirtual(V5);
+  // Local control is authoritative. Do not sync a stale cloud mode over local
+  // AUTO operation after an outage. Publish the mode currently running on-device.
+  Blynk.virtualWrite(V5, autoMode ? 1 : 0);
+
+  // Never restore stale manual ON commands after reconnect.
   Blynk.virtualWrite(V4, 0);
   Blynk.virtualWrite(V10, 0);
+
+  // Refresh sensor readings and current pump states immediately after reconnect.
+  Blynk.virtualWrite(V0, soilMoisture1);
+  Blynk.virtualWrite(V3, pump1State ? 1 : 0);
+  Blynk.virtualWrite(V6, soilRaw1);
+  Blynk.virtualWrite(V7, soilMoisture2);
+  Blynk.virtualWrite(V8, soilRaw2);
+  Blynk.virtualWrite(V9, pump2State ? 1 : 0);
 }
 
 
@@ -454,52 +491,45 @@ void setup() {
   // ----------------------------------------------------------
 
   WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
 
   WiFiManager wm;
-
   wm.setConfigPortalTimeout(180);
 
   Serial.println("Starting WiFiManager...");
 
-  if (!wm.autoConnect("ESP32-Irrigation")) {
+  bool wifiConnected = wm.autoConnect("ESP32-Irrigation");
 
-    Serial.println(
-      "WiFiManager failed. Restarting..."
-    );
-
-    delay(3000);
-
-    ESP.restart();
+  if (wifiConnected) {
+    Serial.println("Wi-Fi connected!");
+    Serial.print("IP Address: ");
+    Serial.println(WiFi.localIP());
+    Serial.print("RSSI: ");
+    Serial.print(WiFi.RSSI());
+    Serial.println(" dBm");
+  } else {
+    // Do not reboot just because Wi-Fi is unavailable. The local irrigation
+    // controller can still measure sensors and run AUTO mode without the cloud.
+    Serial.println("Wi-Fi unavailable; continuing local operation without cloud.");
+    WiFi.mode(WIFI_STA);
+    WiFi.setAutoReconnect(true);
   }
-
-
-  Serial.println("Wi-Fi connected!");
-
-  Serial.print("IP Address: ");
-  Serial.println(WiFi.localIP());
-
-  Serial.print("RSSI: ");
-  Serial.print(WiFi.RSSI());
-  Serial.println(" dBm");
 
 
   // ----------------------------------------------------------
   // Blynk
   // ----------------------------------------------------------
 
-  Serial.println("Connecting to Blynk...");
+  Serial.println("Configuring Blynk...");
 
   Blynk.config(BLYNK_AUTH_TOKEN);
 
-  if (Blynk.connect(10000)) {
-
+  // Use only a short startup attempt. Reconnection is retried periodically
+  // from the main loop so cloud outages do not keep the controller in setup.
+  if (WiFi.status() == WL_CONNECTED && Blynk.connect(500)) {
     Serial.println("Blynk connected!");
-
   } else {
-
-    Serial.println(
-      "Blynk connection failed. Blynk will retry."
-    );
+    Serial.println("Blynk currently unavailable; local irrigation remains active.");
   }
 
 
@@ -520,10 +550,11 @@ void setup() {
 
   // Start one 100-sample measurement every 2 seconds.
   // Sampling itself is non-blocking.
-  timer.setInterval(
-    2000L,
-    scheduleSoilMeasurement
-  );
+  timer.setInterval(2000L, scheduleSoilMeasurement);
+
+  // Retry saved Wi-Fi and Blynk connections periodically. The mDash client
+  // handles its own reconnects after mDashBegin().
+  timer.setInterval(15000L, maintainCloudConnections);
 
 
   Serial.println();
