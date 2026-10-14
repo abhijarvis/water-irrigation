@@ -160,6 +160,7 @@ The firmware calculates moisture as a percentage from each sensor's dry and wet 
 - **Pump 2 starts:** when AUTO mode is enabled, Pump 2 is OFF, and Area 2 reads at or below 30%.
 - **Pump 2 stops:** when Pump 2 is ON and Area 2 reaches at least 60%.
 - **Run-time failsafe:** each pump is stopped and locked out after 10 minutes of continuous operation; adjust `MAX_PUMP_RUNTIME_MS` to suit your setup. The lockout remains until the ESP32 is rebooted, so investigate the cause before restarting.
+- **Sensor rail fault protection:** if a sensor's averaged ADC reading stays at or below 20, or at or above 4075, for three consecutive measurements, its matching pump is stopped and locked out until reboot. These limits catch likely disconnected/shorted sensor readings; validate them for your sensor hardware.
 - **MANUAL mode:** V4 controls Pump 1 and V10 controls Pump 2 independently.
 - **Startup:** both pumps are initialized OFF.
 
@@ -247,7 +248,7 @@ The project calls `mDashBegin(MDASH_DEVICE_PASSWORD)` and includes `mongoose_con
 #define MG_LOG_LEVEL 0
 ```
 
-mDash connectivity and firmware-update behavior depend on compatible versions of the mDash and Mongoose libraries and the correct device configuration. Confirm successful device connectivity in the mDash console; the presence of TLS settings alone does not prove that a cloud session is healthy.
+The documented Arduino mDash client maintains its TLS session and reconnects internally after `mDashBegin()`; its documented API does not require a separate `mDashLoop()`/poll call. The firmware keeps `loop()` non-blocking and yields to the ESP32 scheduler. mDash connectivity and firmware-update behavior still depend on compatible mDash/Mongoose versions and the correct device password. Confirm live connectivity in the mDash console; TLS settings alone do not prove that a cloud session is healthy.
 
 ## Project structure
 
@@ -284,7 +285,7 @@ water-irrigation/
 
 ### Pump/relay does not switch
 - Verify GPIO 26 for Pump 1 and GPIO 27 for Pump 2, relay supply, pump supplies, and relay trigger polarity.
-- If a pump timed out, its firmware lockout remains until reboot. Check the sensor calibration, water supply, tubing, and pump before restarting.
+- If a pump timed out or its sensor shows repeated ADC rail readings, that pump is locked out until reboot. Check sensor wiring/calibration, water supply, tubing, and pump before restarting.
 - The default is active-LOW (`RELAY_ACTIVE_LOW true`). Change it only after verifying the module's logic.
 - Never connect the pump directly to an ESP32 GPIO.
 
