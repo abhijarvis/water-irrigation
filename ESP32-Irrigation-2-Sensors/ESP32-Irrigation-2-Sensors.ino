@@ -2,7 +2,7 @@
  * ESP32 Water Irrigation Controller - Two Sensors
  * WiFiManager + Blynk + mDash
  *
- * Two soil moisture sensors + relay/pump control
+ * Two soil moisture sensors + two independently controlled pumps
  *
  * Copyright (c) 2026 Abhishek Pandit
  */
@@ -24,7 +24,8 @@ BlynkTimer timer;
 
 #define SOIL_SENSOR_1_PIN 34
 #define SOIL_SENSOR_2_PIN 35
-#define PUMP_PIN          26
+#define PUMP1_PIN         26
+#define PUMP2_PIN         27
 
 // Most common relay modules are active LOW.
 // Change to false if your relay works in the opposite way.
@@ -71,8 +72,12 @@ float soilMoisture2 = 0.0;
 int soilRaw1 = 0;
 int soilRaw2 = 0;
 
-bool pumpState = false;
+bool pump1State = false;
+bool pump2State = false;
 bool autoMode = false;
+#define MAX_PUMP_RUNTIME_MS (10UL * 60UL * 1000UL)
+unsigned long pump1StartedAtMs = 0;
+unsigned long pump2StartedAtMs = 0;
 
 // Non-blocking ADC sampler
 bool samplingSoil = false;
@@ -86,20 +91,28 @@ unsigned long lastSoilSampleMs = 0;
 // Pump Control
 // ============================================================
 
-void setPump(bool on) {
+void writePumpOutput(uint8_t pin, bool on) {
+  if (RELAY_ACTIVE_LOW) digitalWrite(pin, on ? LOW : HIGH);
+  else digitalWrite(pin, on ? HIGH : LOW);
+}
 
-  pumpState = on;
+void setPump1(bool on) {
+  if (pump1State == on) return;
+  pump1State = on;
+  writePumpOutput(PUMP1_PIN, on);
+  pump1StartedAtMs = on ? millis() : 0;
+  Blynk.virtualWrite(V3, pump1State ? 1 : 0);
+  Serial.print("Pump 1 (Area 1): ");
+  Serial.println(on ? "ON" : "OFF");
+}
 
-  if (RELAY_ACTIVE_LOW) {
-    digitalWrite(PUMP_PIN, on ? LOW : HIGH);
-  } else {
-    digitalWrite(PUMP_PIN, on ? HIGH : LOW);
-  }
-
-  // Immediately update Blynk pump status.
-  Blynk.virtualWrite(V3, pumpState ? 1 : 0);
-
-  Serial.print("Pump: ");
+void setPump2(bool on) {
+  if (pump2State == on) return;
+  pump2State = on;
+  writePumpOutput(PUMP2_PIN, on);
+  pump2StartedAtMs = on ? millis() : 0;
+  Blynk.virtualWrite(V9, pump2State ? 1 : 0);
+  Serial.print("Pump 2 (Area 2): ");
   Serial.println(on ? "ON" : "OFF");
 }
 
@@ -172,7 +185,8 @@ void processSoilSampling() {
     // V0 = Area 1 moisture %, V3 = Pump status, V6 = Area 1 raw ADC
     // V7 = Area 2 moisture %, V8 = Area 2 raw ADC
     Blynk.virtualWrite(V0, soilMoisture1);
-    Blynk.virtualWrite(V3, pumpState ? 1 : 0);
+    Blynk.virtualWrite(V3, pump1State ? 1 : 0);
+    Blynk.virtualWrite(V9, pump2State ? 1 : 0);
     Blynk.virtualWrite(V6, soilRaw1);
     Blynk.virtualWrite(V7, soilMoisture2);
     Blynk.virtualWrite(V8, soilRaw2);
@@ -192,8 +206,10 @@ void processSoilSampling() {
     Serial.print(soilMoisture2, 1);
     Serial.println(" %");
 
-    Serial.print("Pump         : ");
-    Serial.println(pumpState ? "ON" : "OFF");
+    Serial.print("Pump 1       : ");
+    Serial.println(pump1State ? "ON" : "OFF");
+    Serial.print("Pump 2       : ");
+    Serial.println(pump2State ? "ON" : "OFF");
 
     Serial.print("Mode         : ");
     Serial.println(autoMode ? "AUTO" : "MANUAL");
@@ -214,27 +230,21 @@ void controlAutomaticIrrigation() {
   }
 
   // Hysteresis prevents rapid relay switching.
-  // One pump serves both areas: start if either area is dry.
-  if (!pumpState &&
-      (soilMoisture1 <= PUMP_ON_THRESHOLD || soilMoisture2 <= PUMP_ON_THRESHOLD)) {
-
-    setPump(true);
-
-    Serial.println(
-      "Automatic irrigation: soil is dry."
-    );
+  // Each sensor controls only its matching pump.
+  if (!pump1State && soilMoisture1 <= PUMP_ON_THRESHOLD) {
+    setPump1(true);
+    Serial.println("AUTO: Area 1 is dry; Pump 1 started.");
+  } else if (pump1State && soilMoisture1 >= PUMP_OFF_THRESHOLD) {
+    setPump1(false);
+    Serial.println("AUTO: Area 1 moisture target reached; Pump 1 stopped.");
   }
 
-  // Stop only after both areas reach the target moisture.
-  else if (pumpState &&
-           soilMoisture1 >= PUMP_OFF_THRESHOLD &&
-           soilMoisture2 >= PUMP_OFF_THRESHOLD) {
-
-    setPump(false);
-
-    Serial.println(
-      "Automatic irrigation: soil moisture is sufficient."
-    );
+  if (!pump2State && soilMoisture2 <= PUMP_ON_THRESHOLD) {
+    setPump2(true);
+    Serial.println("AUTO: Area 2 is dry; Pump 2 started.");
+  } else if (pump2State && soilMoisture2 >= PUMP_OFF_THRESHOLD) {
+    setPump2(false);
+    Serial.println("AUTO: Area 2 moisture target reached; Pump 2 stopped.");
   }
 }
 
@@ -257,7 +267,7 @@ void scheduleSoilMeasurement() {
 // ============================================================
 
 // V4 = Manual pump control
-// Use a Switch widget in Blynk.
+// V4 controls Pump 1; V10 controls Pump 2. Use a Switch widget for each.
 BLYNK_WRITE(V4) {
 
   if (autoMode) {
@@ -272,7 +282,16 @@ BLYNK_WRITE(V4) {
     return;
   }
 
-  setPump(param.asInt() != 0);
+  setPump1(param.asInt() != 0);
+}
+
+BLYNK_WRITE(V10) {
+  if (autoMode) {
+    Serial.println("Pump 2 manual command ignored: AUTO mode is active.");
+    Blynk.virtualWrite(V10, 0);
+    return;
+  }
+  setPump2(param.asInt() != 0);
 }
 
 
@@ -305,7 +324,7 @@ BLYNK_CONNECTED() {
   Serial.println("Blynk connected!");
 
   // Restore the last Blynk switch states.
-  Blynk.syncVirtual(V4, V5);
+  Blynk.syncVirtual(V4, V5, V10);
 }
 
 
@@ -339,15 +358,11 @@ void setup() {
   // Pump / Relay
   // ----------------------------------------------------------
 
-  pinMode(PUMP_PIN, OUTPUT);
-
-  // Safe startup: pump OFF.
-
-  if (RELAY_ACTIVE_LOW) {
-    digitalWrite(PUMP_PIN, HIGH);
-  } else {
-    digitalWrite(PUMP_PIN, LOW);
-  }
+  pinMode(PUMP1_PIN, OUTPUT);
+  pinMode(PUMP2_PIN, OUTPUT);
+  // Safe startup: both pumps OFF.
+  writePumpOutput(PUMP1_PIN, false);
+  writePumpOutput(PUMP2_PIN, false);
 
 
   // ----------------------------------------------------------
@@ -431,7 +446,8 @@ void setup() {
   Serial.println("System ready.");
   Serial.println("Area 1 sensor: GPIO 34 (Blynk V0, raw V6)");
   Serial.println("Area 2 sensor: GPIO 35 (Blynk V7, raw V8)");
-  Serial.println("Single pump  : GPIO 26");
+  Serial.println("Pump 1       : GPIO 26 (Area 1)");
+  Serial.println("Pump 2       : GPIO 27 (Area 2)");
   Serial.println("ADC samples : 100");
   Serial.println("Sampling    : non-blocking");
   Serial.println("Pump starts : OFF");
@@ -454,6 +470,17 @@ void loop() {
   // Process one ADC sample at a time.
   // No 500 ms blocking delay.
   processSoilSampling();
+
+  // Independent safety cutoff if moisture thresholds are not reached.
+  unsigned long now = millis();
+  if (pump1State && (unsigned long)(now - pump1StartedAtMs) >= MAX_PUMP_RUNTIME_MS) {
+    setPump1(false);
+    Serial.println("SAFETY: Pump 1 stopped after maximum run time.");
+  }
+  if (pump2State && (unsigned long)(now - pump2StartedAtMs) >= MAX_PUMP_RUNTIME_MS) {
+    setPump2(false);
+    Serial.println("SAFETY: Pump 2 stopped after maximum run time.");
+  }
 
   // No deliberate delay here.
   // mDash/Blynk get maximum loop time.
