@@ -75,6 +75,9 @@ int soilRaw2 = 0;
 bool pump1State = false;
 bool pump2State = false;
 bool autoMode = false;
+bool hasSoilMeasurement = false;
+bool pump1TimedOut = false;
+bool pump2TimedOut = false;
 #define MAX_PUMP_RUNTIME_MS (10UL * 60UL * 1000UL)
 unsigned long pump1StartedAtMs = 0;
 unsigned long pump2StartedAtMs = 0;
@@ -175,6 +178,7 @@ void processSoilSampling() {
     soilRaw2 = soilSampleTotal2 / SOIL_ADC_SAMPLES;
     soilMoisture1 = calculateMoisture(soilRaw1, SOIL1_DRY_ADC, SOIL1_WET_ADC);
     soilMoisture2 = calculateMoisture(soilRaw2, SOIL2_DRY_ADC, SOIL2_WET_ADC);
+    hasSoilMeasurement = true;
 
     samplingSoil = false;
 
@@ -225,13 +229,13 @@ void processSoilSampling() {
 
 void controlAutomaticIrrigation() {
 
-  if (!autoMode) {
+  if (!autoMode || !hasSoilMeasurement) {
     return;
   }
 
   // Hysteresis prevents rapid relay switching.
   // Each sensor controls only its matching pump.
-  if (!pump1State && soilMoisture1 <= PUMP_ON_THRESHOLD) {
+  if (!pump1State && !pump1TimedOut && soilMoisture1 <= PUMP_ON_THRESHOLD) {
     setPump1(true);
     Serial.println("AUTO: Area 1 is dry; Pump 1 started.");
   } else if (pump1State && soilMoisture1 >= PUMP_OFF_THRESHOLD) {
@@ -239,7 +243,7 @@ void controlAutomaticIrrigation() {
     Serial.println("AUTO: Area 1 moisture target reached; Pump 1 stopped.");
   }
 
-  if (!pump2State && soilMoisture2 <= PUMP_ON_THRESHOLD) {
+  if (!pump2State && !pump2TimedOut && soilMoisture2 <= PUMP_ON_THRESHOLD) {
     setPump2(true);
     Serial.println("AUTO: Area 2 is dry; Pump 2 started.");
   } else if (pump2State && soilMoisture2 >= PUMP_OFF_THRESHOLD) {
@@ -475,11 +479,13 @@ void loop() {
   unsigned long now = millis();
   if (pump1State && (unsigned long)(now - pump1StartedAtMs) >= MAX_PUMP_RUNTIME_MS) {
     setPump1(false);
-    Serial.println("SAFETY: Pump 1 stopped after maximum run time.");
+    pump1TimedOut = true;
+    Serial.println("SAFETY: Pump 1 stopped and locked out after maximum run time. Reboot after checking the system.");
   }
   if (pump2State && (unsigned long)(now - pump2StartedAtMs) >= MAX_PUMP_RUNTIME_MS) {
     setPump2(false);
-    Serial.println("SAFETY: Pump 2 stopped after maximum run time.");
+    pump2TimedOut = true;
+    Serial.println("SAFETY: Pump 2 stopped and locked out after maximum run time. Reboot after checking the system.");
   }
 
   // No deliberate delay here.
