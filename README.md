@@ -72,6 +72,9 @@ For either variant, create a private `secrets.h` in that variant's folder using 
 ## Features
 
 - Wi-Fi setup through WiFiManager; no Wi-Fi credentials hard-coded in the firmware
+- Local AUTO irrigation continues during Wi-Fi, Blynk, or mDash outages; cloud services are not required for sensor-based pump decisions
+- Periodic Wi-Fi/Blynk reconnect attempts without resetting local pump mode or pump states
+- Blynk reconnect publishes the current on-device mode, sensor readings, and pump states; stale manual ON commands are not restored
 - Two soil-moisture sensors sampled and reported separately
 - 100 ADC samples per measurement, collected without a long blocking delay
 - Blynk dashboard readings for moisture, raw ADC values, pump status, and control mode
@@ -167,6 +170,16 @@ The firmware calculates moisture as a percentage from each sensor's dry and wet 
 
 These thresholds are starting values; tune them for your sensors, soil, and plants. Each area has its own pump, so the two areas can be watered independently.
 
+## Offline operation and reconnection
+
+- **Wi-Fi unavailable/disconnected:** local sensor sampling, AUTO thresholds, pump runtime cutoff, sensor-fault lockouts, and pump control continue on the ESP32. Wi-Fi reconnection is requested periodically using saved credentials.
+- **Blynk unavailable:** automatic irrigation does not depend on Blynk. Sensor readings and pump state updates are skipped while disconnected; a short reconnect attempt is made periodically when Wi-Fi is available.
+- **Blynk reconnects:** firmware publishes the current local AUTO/MANUAL mode, latest readings, and actual pump states. It resets the manual pump widgets to OFF and does not synchronize a stale cloud mode or restore old manual ON commands.
+- **mDash unavailable:** irrigation remains local; mDash reconnect behavior is handled by its client after `mDashBegin()`.
+- **Boot safety:** both pumps start OFF and the mode starts in MANUAL. Cloud availability is not a prerequisite for the firmware to finish setup after the WiFiManager portal timeout.
+
+Cloud dashboards and remote commands require connectivity. Local automatic control does not. Always test Wi-Fi/Blynk outages with the pumps safely isolated before deploying unattended.
+
 ## Sensor calibration
 
 The firmware currently defines these starting values:
@@ -229,7 +242,7 @@ Open `ESP32-Irrigation/ESP32-Irrigation.ino` in Arduino IDE. Install the require
 
 ### 4. Upload and provision Wi-Fi
 
-Upload the sketch and open Serial Monitor at **115200 baud**. If Wi-Fi has not been configured, the ESP32 starts a WiFiManager access point named `ESP32-Irrigation`. Connect to it and select your Wi-Fi network. The configuration portal timeout is 180 seconds.
+Upload the sketch and open Serial Monitor at **115200 baud**. If Wi-Fi has not been configured, the ESP32 starts a WiFiManager access point named `ESP32-Irrigation`. Connect to it and select your Wi-Fi network. The configuration portal timeout is 180 seconds. If Wi-Fi remains unavailable after the portal times out, firmware no longer reboots just because of that failure; it proceeds with local control and periodically retries Wi-Fi using saved credentials. On a first-ever setup with no saved credentials, configure Wi-Fi through the portal (rebooting to reopen it if necessary).
 
 ### 5. Configure the Blynk dashboard
 
