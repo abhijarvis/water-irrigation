@@ -142,7 +142,7 @@ Suggested widgets:
 - LED/value displays for V3 and V9
 - Separate Switch widgets for V4 and V10
 
-The firmware restores V4, V5, and V10 from Blynk when it reconnects. Manual pump commands are ignored while AUTO mode is active.
+The firmware synchronizes V5 (AUTO/MANUAL mode) when Blynk reconnects. It intentionally does not restore V4/V10 manual ON commands, preventing stale cloud switch states from unexpectedly starting a pump. Manual pump commands are ignored while AUTO mode is active.
 
 ## Automatic irrigation behavior
 
@@ -160,6 +160,7 @@ The firmware calculates moisture as a percentage from each sensor's dry and wet 
 - **Pump 2 starts:** when AUTO mode is enabled, Pump 2 is OFF, and Area 2 reads at or below 30%.
 - **Pump 2 stops:** when Pump 2 is ON and Area 2 reaches at least 60%.
 - **Run-time failsafe:** each pump is stopped and locked out after 10 minutes of continuous operation; adjust `MAX_PUMP_RUNTIME_MS` to suit your setup. The lockout remains until the ESP32 is rebooted, so investigate the cause before restarting.
+- **Automatic restart cooldown:** after a pump stops, automatic mode waits at least 30 seconds before restarting it, reducing rapid cycling. Manual operation remains available in MANUAL mode.
 - **Sensor rail fault protection:** if a sensor's averaged ADC reading stays at or below 20, or at or above 4075, for three consecutive measurements, its matching pump is stopped and locked out until reboot. These limits catch likely disconnected/shorted sensor readings; validate them for your sensor hardware.
 - **MANUAL mode:** V4 controls Pump 1 and V10 controls Pump 2 independently.
 - **Startup:** both pumps are initialized OFF.
