@@ -1,8 +1,8 @@
 # ESP32 Smart Water Irrigation System
 
-An ESP32-based IoT irrigation controller for monitoring **two separate soil areas** and controlling one shared water pump. It combines Wi-Fi provisioning with WiFiManager, remote monitoring and control through Blynk, and remote device management through mDash.
+An ESP32-based IoT irrigation controller for monitoring **two separate soil areas** and controlling two independent water pumps. It combines Wi-Fi provisioning with WiFiManager, remote monitoring and control through Blynk, and remote device management through mDash.
 
-> **Current setup:** two analog soil-moisture sensors (GPIO 34 and 35) and one relay-controlled pump (GPIO 26). Because both areas share one pump, automatic watering starts when either area is dry and stops only when both areas reach the configured moisture target.
+> **Current setup:** two analog soil-moisture sensors (GPIO 34 and 35), with Pump 1 on GPIO 26 for Area 1 and Pump 2 on GPIO 27 for Area 2. Each sensor independently controls its matching pump in AUTO mode.
 
 
 ## System architecture diagram
@@ -16,9 +16,12 @@ flowchart TD
     WM["WiFiManager<br/>Wi-Fi provisioning"] <--> ESP
     ESP <--> BK["Blynk cloud/app<br/>Moisture · ADC · Pump · Mode"]
     ESP <--> MD["mDash<br/>Device management / FOTA"]
-    ESP --> R["Relay module<br/>GPIO 26"]
-    R --> P["DC water pump"]
-    PS["External pump power supply"] --> P
+    ESP --> R1["Relay 1<br/>GPIO 26"]
+    R1 --> P1["Pump 1 · Area 1"]
+    ESP --> R2["Relay 2<br/>GPIO 27"]
+    R2 --> P2["Pump 2 · Area 2"]
+    PS["Suitable external pump supplies"] --> P1
+    PS --> P2
     G["Common ground for ESP32 and sensors"] --- S1
     G --- S2
 ```
@@ -36,12 +39,17 @@ flowchart LR
       GND --- B
     end
     subgraph Pump control
-      G26["ESP32 GPIO 26"] --> IN["Relay IN"]
-      RV["Relay supply as required by module"] --> REL["Relay module"]
-      IN --> REL
-      REL --> CONTACTS["Relay COM/NO contacts"]
-      EXT["External pump supply"] --> CONTACTS
-      CONTACTS --> MOTOR["DC pump"]
+      G26["ESP32 GPIO 26"] --> IN1["Relay 1 IN"]
+      G27["ESP32 GPIO 27"] --> IN2["Relay 2 IN"]
+      RV["Relay supply as required"] --> REL["Two-channel relay or two relay modules"]
+      IN1 --> REL
+      IN2 --> REL
+      REL --> CONTACTS1["Relay 1 COM/NO"]
+      REL --> CONTACTS2["Relay 2 COM/NO"]
+      EXT["Pump power supply 1"] --> CONTACTS1
+      EXT2["Pump power supply 2"] --> CONTACTS2
+      CONTACTS1 --> MOTOR1["Pump 1 · Area 1"]
+      CONTACTS2 --> MOTOR2["Pump 2 · Area 2"]
     end
     EG["ESP32 GND"] --- GND
 ```
@@ -57,7 +65,7 @@ Two standalone Arduino sketches are available. Open **only one sketch folder at 
 | One sensor | [ESP32-Irrigation-1-Sensor.ino](ESP32-Irrigation-1-Sensor/ESP32-Irrigation-1-Sensor.ino) | One sensor AO → GPIO 34 | V0 = moisture, V6 = raw ADC |
 | Two sensors | [ESP32-Irrigation-2-Sensors.ino](ESP32-Irrigation-2-Sensors/ESP32-Irrigation-2-Sensors.ino) | Area 1 AO → GPIO 34; Area 2 AO → GPIO 35 | V0/V6 = Area 1; V7/V8 = Area 2 |
 
-Both variants use GPIO 26 for the shared pump relay, V3 for pump status, V4 for manual pump control, and V5 for AUTO/MANUAL mode. Both use the same WiFiManager, Blynk, and mDash integration.
+The two-sensor variant uses GPIO 26 for Pump 1 and GPIO 27 for Pump 2. Blynk V3/V4 are Pump 1 status/manual control; V9/V10 are Pump 2 status/manual control; V5 selects AUTO/MANUAL mode. The one-sensor variant still uses GPIO 26 and V3/V4 for its single pump. Both variants use WiFiManager, Blynk, and mDash integration.
 
 For either variant, create a private `secrets.h` in that variant's folder using the example in the setup section below. The file is ignored by Git. Calibrate the dry/wet ADC constants for the sensor or sensors you actually use.
 
@@ -79,9 +87,9 @@ For either variant, create a private `secrets.h` in that variant's folder using 
 
 - ESP32 Dev Module
 - 2 analog soil-moisture sensors compatible with the ESP32's 3.3 V logic
-- 1 relay module or appropriately rated MOSFET driver
-- 1 DC water pump
-- External power supply suitable for the pump
+- A two-channel relay module or two appropriately rated pump drivers
+- 2 DC water pumps
+- Suitable external power supply or supplies for both pumps
 - Tubing and connecting wires
 - USB cable/power supply for the ESP32
 
@@ -93,7 +101,8 @@ For either variant, create a private `secrets.h` in that variant's folder using 
 | Area 2 moisture sensor AO | GPIO 35 | Analog input |
 | Both sensor VCC | Suitable sensor supply | Use 3.3 V when required by the sensor; keep output within ESP32 ADC limits |
 | Both sensor GND | ESP32 GND | Common ground for sensor readings |
-| Relay control input | GPIO 26 | Firmware defaults to active-LOW relay logic |
+| Pump 1 relay input | GPIO 26 | Area 1; firmware defaults to active-LOW logic |
+| Pump 2 relay input | GPIO 27 | Area 2; firmware defaults to active-LOW logic |
 | Relay/pump contacts | Pump supply circuit | Follow the relay module ratings and pump supply requirements |
 
 **Safety:** Never power the pump from an ESP32 GPIO. Switch the pump using a correctly rated relay/driver and an appropriate external supply. Check the relay's active level before connecting the pump. Do not apply 5 V to an ESP32 GPIO or ADC input.
@@ -104,7 +113,8 @@ For either variant, create a private `secrets.h` in that variant's folder using 
 |---:|---|
 | 34 | Area 1 soil-moisture analog input |
 | 35 | Area 2 soil-moisture analog input |
-| 26 | Pump relay control |
+| 26 | Pump 1 relay control (Area 1) |
+| 27 | Pump 2 relay control (Area 2) |
 
 The firmware uses 12-bit ADC readings and `ADC_11db` attenuation. ADC values and moisture percentages depend on the sensor and the soil; calibrate each sensor independently.
 
@@ -115,21 +125,24 @@ Create a Blynk template/device and add datastreams matching these virtual pins:
 | Virtual pin | Function | Suggested data type |
 |---|---|---|
 | V0 | Area 1 moisture (%) | Double |
-| V3 | Pump status (0 = OFF, 1 = ON) | Integer |
-| V4 | Manual pump command (0 = OFF, 1 = ON) | Integer |
+| V3 | Pump 1 status (0 = OFF, 1 = ON) | Integer |
+| V4 | Pump 1 manual command (0 = OFF, 1 = ON) | Integer |
 | V5 | Mode (0 = MANUAL, 1 = AUTO) | Integer |
 | V6 | Area 1 raw ADC average | Integer |
 | V7 | Area 2 moisture (%) | Double |
 | V8 | Area 2 raw ADC average | Integer |
+| V9 | Pump 2 status (0 = OFF, 1 = ON) | Integer |
+| V10 | Pump 2 manual command (0 = OFF, 1 = ON) | Integer |
 
 Suggested widgets:
 - Gauges or value displays for V0 and V7
 - Value displays for V6 and V8 when calibrating
 - Switch for V4
 - Switch for V5
-- LED/value display for V3
+- LED/value displays for V3 and V9
+- Separate Switch widgets for V4 and V10
 
-The firmware restores V4 and V5 from Blynk when it reconnects. Manual pump commands are ignored while AUTO mode is active.
+The firmware restores V4, V5, and V10 from Blynk when it reconnects. Manual pump commands are ignored while AUTO mode is active.
 
 ## Automatic irrigation behavior
 
@@ -142,12 +155,15 @@ Default settings in `ESP32-Irrigation.ino`:
 
 The firmware calculates moisture as a percentage from each sensor's dry and wet ADC calibration values. With the default calibration, a higher ADC reading means drier soil and a lower reading means wetter soil.
 
-- **Pump starts:** when AUTO mode is enabled, the pump is OFF, and either area reads at or below 30%.
-- **Pump stops:** when the pump is ON and both areas read at or above 60%.
-- **MANUAL mode:** V4 controls the pump directly.
-- **Startup:** the pump is initialized OFF.
+- **Pump 1 starts:** when AUTO mode is enabled, Pump 1 is OFF, and Area 1 reads at or below 30%.
+- **Pump 1 stops:** when Pump 1 is ON and Area 1 reaches at least 60%.
+- **Pump 2 starts:** when AUTO mode is enabled, Pump 2 is OFF, and Area 2 reads at or below 30%.
+- **Pump 2 stops:** when Pump 2 is ON and Area 2 reaches at least 60%.
+- **Run-time failsafe:** each pump is automatically stopped after 10 minutes of continuous operation; adjust `MAX_PUMP_RUNTIME_MS` to suit your setup.
+- **MANUAL mode:** V4 controls Pump 1 and V10 controls Pump 2 independently.
+- **Startup:** both pumps are initialized OFF.
 
-These thresholds are starting values; tune them for your sensors, soil, and plants. With one shared pump, this logic cannot water each area independently. Independent watering requires a separate pump or a separately controlled valve for each area.
+These thresholds are starting values; tune them for your sensors, soil, and plants. Each area has its own pump, so the two areas can be watered independently.
 
 ## Sensor calibration
 
@@ -179,7 +195,7 @@ The firmware averages 100 samples per measurement. Calibration readings can vary
 - mDash library and its compatible Mongoose dependency/configuration
 - ArduinoJson if required by the installed library versions
 
-The project includes `ESP32-Irrigation/mongoose_config.h` with the Mongoose ESP32 and built-in TLS settings. Library versions can affect compilation and cloud connectivity.
+The project includes Mongoose configuration headers with ESP32 and built-in TLS settings. Library versions can affect compilation and cloud connectivity.
 
 ## Setup
 
@@ -267,7 +283,7 @@ water-irrigation/
 - Confirm sensor output voltage is safe for the ESP32.
 
 ### Pump/relay does not switch
-- Verify GPIO 26 wiring, relay supply, pump supply, and relay trigger polarity.
+- Verify GPIO 26 for Pump 1 and GPIO 27 for Pump 2, relay supply, pump supplies, and relay trigger polarity.
 - The default is active-LOW (`RELAY_ACTIVE_LOW true`). Change it only after verifying the module's logic.
 - Never connect the pump directly to an ESP32 GPIO.
 
@@ -283,7 +299,7 @@ water-irrigation/
 | WiFiManager provisioning | Implemented in firmware |
 | Blynk integration and controls | Implemented in firmware; dashboard must be configured |
 | Two-sensor measurement | Implemented in firmware; hardware calibration required |
-| Shared-pump automatic logic | Implemented in firmware; validate thresholds and wiring before use |
+| Independent two-pump automatic logic | Implemented in the two-sensor firmware; validate thresholds and wiring before use |
 | Relay/pump hardware | Depends on your wiring and testing |
 | mDash integration | Present in firmware; verify live connectivity and FOTA on your device |
 
