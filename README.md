@@ -142,7 +142,7 @@ Suggested widgets:
 - LED/value displays for V3 and V9
 - Separate Switch widgets for V4 and V10
 
-The firmware synchronizes V5 (AUTO/MANUAL mode) when Blynk reconnects. It intentionally does not restore V4/V10 manual ON commands, preventing stale cloud switch states from unexpectedly starting a pump. Manual pump commands are ignored while AUTO mode is active.
+The firmware synchronizes V5 (AUTO/MANUAL mode) when Blynk reconnects and resets the V4/V10 manual widgets to OFF. It intentionally does not restore old manual ON commands, preventing stale cloud switch states from unexpectedly starting a pump. Manual pump commands are ignored while AUTO mode is active.
 
 ## Automatic irrigation behavior
 
