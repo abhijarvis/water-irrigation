@@ -49,6 +49,13 @@ BlynkTimer timer;
 #define SOIL2_DRY_ADC 1103  // Update after calibrating Sensor 2
 #define SOIL2_WET_ADC 1030  // Update after calibrating Sensor 2
 
+// Fail the build if either sensor's calibration is equal or reversed.
+// This firmware assumes a higher ADC reading means drier soil.
+static_assert(SOIL1_DRY_ADC > SOIL1_WET_ADC,
+              "Invalid Sensor 1 calibration: DRY_ADC must be greater than WET_ADC");
+static_assert(SOIL2_DRY_ADC > SOIL2_WET_ADC,
+              "Invalid Sensor 2 calibration: DRY_ADC must be greater than WET_ADC");
+
 // Keep 100 samples per measurement.
 // Sampling is NON-BLOCKING so mDash/Blynk remain responsive.
 #define SOIL_ADC_SAMPLES 100
